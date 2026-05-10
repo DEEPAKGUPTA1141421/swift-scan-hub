@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Truck, Package, MapPin, Hash, User, CheckCircle } from 'lucide-react';
+import { Truck, Package, MapPin, Hash, User, CheckCircle, Loader2 } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
@@ -18,47 +18,67 @@ export default function Dispatch() {
   const [vehicleNumber, setVehicleNumber] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
   const [dispatched, setDispatched] = useState(false);
-  
-  const { getParcelByQr, dispatchParcel, currentWarehouse } = useWarehouse();
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [isDispatching, setIsDispatching] = useState(false);
 
-  const handleScan = (qrCode: string) => {
-    const parcel = getParcelByQr(qrCode);
-    
-    if (!parcel) {
-      toast.error('Parcel not found');
-      return;
+  const { getParcelByQr, dispatchParcel, currentWarehouse, refreshData } = useWarehouse();
+
+  const handleScan = async (qrCode: string) => {
+    setIsLookingUp(true);
+    try {
+      // Try local state first (fast path)
+      const local = getParcelByQr(qrCode);
+      if (local) {
+        if (local.currentWarehouse !== currentWarehouse?.city) {
+          toast.error(`Shipment belongs to ${local.currentWarehouse}, not this warehouse`);
+          return;
+        }
+        if (local.status !== 'READY_TO_DISPATCH') {
+          toast.error(`Shipment status is ${local.status} — must be READY_TO_DISPATCH`);
+          return;
+        }
+        setScannedParcel(local);
+        setDispatched(false);
+        toast.success('Shipment found');
+        return;
+      }
+
+      // Fallback: refresh warehouse data and try again
+      await refreshData();
+      const refreshed = getParcelByQr(qrCode);
+      if (!refreshed) {
+        toast.error('Shipment not found');
+        return;
+      }
+      if (refreshed.status !== 'READY_TO_DISPATCH') {
+        toast.error(`Shipment status is ${refreshed.status} — must be READY_TO_DISPATCH`);
+        return;
+      }
+      setScannedParcel(refreshed);
+      setDispatched(false);
+      toast.success('Shipment found');
+    } finally {
+      setIsLookingUp(false);
     }
-
-    if (parcel.currentWarehouse !== currentWarehouse?.city) {
-      toast.error(`Parcel belongs to ${parcel.currentWarehouse}, not this warehouse`);
-      return;
-    }
-
-    if (parcel.status !== 'READY_TO_DISPATCH') {
-      toast.error(`Parcel status is ${parcel.status} - must be READY_TO_DISPATCH`);
-      return;
-    }
-
-    setScannedParcel(parcel);
-    setDispatched(false);
-    toast.success('Parcel found');
   };
 
-  const handleDispatch = () => {
+  const handleDispatch = async () => {
     if (!scannedParcel) return;
     if (!riderId && !vehicleNumber) {
       toast.error('Enter Rider ID or Vehicle Number');
       return;
     }
 
-    const result = dispatchParcel(scannedParcel.id, riderId, vehicleNumber);
-    
+    setIsDispatching(true);
+    const result = await dispatchParcel(scannedParcel.id, riderId, vehicleNumber);
+    setIsDispatching(false);
+
     if (result.success) {
       setShowConfirm(false);
       setDispatched(true);
-      toast.success('Parcel dispatched successfully');
+      toast.success('Shipment dispatched successfully');
     } else {
-      toast.error(result.error || 'Failed to dispatch');
+      toast.error(result.error ?? 'Failed to dispatch');
     }
   };
 
@@ -71,19 +91,26 @@ export default function Dispatch() {
 
   return (
     <Layout>
-      <PageHeader 
-        title="Dispatch Parcel" 
-        subtitle="Send parcels to riders or vehicles"
-        backTo="/dashboard" 
+      <PageHeader
+        title="Dispatch Shipment"
+        subtitle="Send shipments to riders or vehicles"
+        backTo="/dashboard"
       />
 
       <div className="max-w-xl mx-auto space-y-8">
         {!dispatched && (
-          <ScanInput 
-            onScan={handleScan} 
-            placeholder="Scan Parcel QR Code" 
-            disabled={dispatched}
+          <ScanInput
+            onScan={qr => void handleScan(qr)}
+            placeholder="Scan Shipment QR / UUID"
+            disabled={isLookingUp}
           />
+        )}
+
+        {isLookingUp && (
+          <div className="flex items-center justify-center gap-2 text-muted-foreground">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span>Looking up shipment…</span>
+          </div>
         )}
 
         {scannedParcel && !dispatched && (
@@ -94,8 +121,8 @@ export default function Dispatch() {
                   <Package className="w-6 h-6 text-primary" />
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Parcel ID</p>
-                  <p className="text-xl font-bold font-mono">{scannedParcel.id}</p>
+                  <p className="text-sm text-muted-foreground">Shipment ID</p>
+                  <p className="text-lg font-bold font-mono">{scannedParcel.id.slice(0, 8)}…</p>
                 </div>
               </div>
               <StatusBadge status={scannedParcel.status} />
@@ -127,8 +154,8 @@ export default function Dispatch() {
                 <Input
                   id="rider"
                   value={riderId}
-                  onChange={(e) => setRiderId(e.target.value.toUpperCase())}
-                  placeholder="e.g., RDR-001"
+                  onChange={e => setRiderId(e.target.value.toUpperCase())}
+                  placeholder="e.g., rider UUID or RDR-001"
                   className="h-12 text-base uppercase"
                 />
               </div>
@@ -141,7 +168,7 @@ export default function Dispatch() {
                 <Input
                   id="vehicle"
                   value={vehicleNumber}
-                  onChange={(e) => setVehicleNumber(e.target.value.toUpperCase())}
+                  onChange={e => setVehicleNumber(e.target.value.toUpperCase())}
                   placeholder="e.g., MH-12-AB-1234"
                   className="h-12 text-base uppercase"
                 />
@@ -150,11 +177,11 @@ export default function Dispatch() {
 
             <Button
               onClick={() => setShowConfirm(true)}
-              disabled={!riderId && !vehicleNumber}
+              disabled={(!riderId && !vehicleNumber) || isDispatching}
               className="w-full h-14 text-lg font-semibold"
             >
               <Truck className="w-6 h-6 mr-2" />
-              Dispatch Parcel
+              Dispatch Shipment
             </Button>
           </div>
         )}
@@ -167,14 +194,10 @@ export default function Dispatch() {
             <div>
               <h2 className="text-2xl font-bold text-success">Dispatched!</h2>
               <p className="text-muted-foreground mt-2">
-                Parcel {scannedParcel?.id} has been dispatched to {scannedParcel?.destinationCity}
+                Shipment dispatched to {scannedParcel?.destinationCity}
               </p>
             </div>
-            <Button
-              onClick={handleReset}
-              variant="outline"
-              className="h-12 px-8"
-            >
+            <Button onClick={handleReset} variant="outline" className="h-12 px-8">
               Dispatch Another
             </Button>
           </div>
@@ -185,9 +208,9 @@ export default function Dispatch() {
         open={showConfirm}
         onOpenChange={setShowConfirm}
         title="Confirm Dispatch"
-        description={`Dispatch parcel ${scannedParcel?.id} with ${scannedParcel?.orders.length} orders to ${scannedParcel?.destinationCity}?`}
-        confirmLabel="Dispatch"
-        onConfirm={handleDispatch}
+        description={`Dispatch shipment with ${scannedParcel?.orders.length} orders to ${scannedParcel?.destinationCity}?`}
+        confirmLabel={isDispatching ? 'Dispatching…' : 'Dispatch'}
+        onConfirm={() => void handleDispatch()}
       />
     </Layout>
   );

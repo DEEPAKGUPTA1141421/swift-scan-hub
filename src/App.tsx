@@ -13,6 +13,8 @@ import CreateParcel from "./pages/CreateParcel";
 import Dispatch from "./pages/Dispatch";
 import ReceiveParcel from "./pages/ReceiveParcel";
 import NotFound from "./pages/NotFound";
+import LiveMapDashboard from "./pages/LiveMapDashboard";
+import ZoneManager from "./pages/ZoneManager";
 
 const queryClient = new QueryClient();
 
@@ -32,6 +34,8 @@ const App = () => (
             <Route path="/create-parcel" element={<CreateParcel />} />
             <Route path="/dispatch" element={<Dispatch />} />
             <Route path="/receive-parcel" element={<ReceiveParcel />} />
+            <Route path="/dashboard/live" element={<LiveMapDashboard />} />
+            <Route path="/zone-manager" element={<ZoneManager />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

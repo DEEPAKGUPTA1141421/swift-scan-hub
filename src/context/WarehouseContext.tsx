@@ -1,242 +1,462 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { Warehouse, Order, Parcel, User, DashboardStats } from '@/types/warehouse';
+import {
+  warehouseApi,
+  parcelApi,
+  shipmentApi,
+  BackendWarehouse,
+  mapBackendParcelToOrder,
+  mapBackendShipmentToParcel,
+} from '@/services/api';
 
-// Mock data
-const MOCK_WAREHOUSES: Warehouse[] = [
-  { id: 'wh-1', name: 'Mumbai Central Hub', city: 'Mumbai' },
-  { id: 'wh-2', name: 'Delhi North Warehouse', city: 'Delhi' },
-  { id: 'wh-3', name: 'Bangalore Tech Hub', city: 'Bangalore' },
-  { id: 'wh-4', name: 'Chennai Port Facility', city: 'Chennai' },
-];
-
-const generateOrderId = () => `ORD-${Date.now().toString(36).toUpperCase()}`;
-const generateParcelId = () => `PCL-${Date.now().toString(36).toUpperCase()}`;
+interface ReceiveOrderResult {
+  success: boolean;
+  order?: Order;
+  needsOtp?: boolean;
+  error?: string;
+}
 
 interface WarehouseContextType {
+  // State
   user: User | null;
   currentWarehouse: Warehouse | null;
   warehouses: Warehouse[];
   orders: Order[];
   parcels: Parcel[];
+  isLoadingWarehouses: boolean;
+  isLoadingData: boolean;
+
+  // Auth
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
+
+  // Warehouse
   selectWarehouse: (warehouseId: string) => void;
-  receiveOrder: (qrCode: string) => { success: boolean; order?: Order; error?: string };
-  createParcel: (destinationCity: string) => Parcel;
-  addOrderToParcel: (orderId: string, parcelId: string) => { success: boolean; error?: string };
-  closeParcel: (parcelId: string) => { success: boolean; error?: string };
-  dispatchParcel: (parcelId: string, riderId: string, vehicleNumber: string) => { success: boolean; error?: string };
-  receiveParcel: (qrCode: string) => { success: boolean; parcel?: Parcel; error?: string };
-  openParcel: (parcelId: string) => { success: boolean; error?: string };
-  getParcelByQr: (qrCode: string) => Parcel | undefined;
+  refreshData: () => Promise<void>;
+
+  // Order operations (backend: parcel)
+  receiveOrder: (qrCode: string) => Promise<ReceiveOrderResult>;
+  confirmWarehouseIn: (parcelId: string, otp: string) => Promise<{ success: boolean; error?: string }>;
   getOrderByQr: (qrCode: string) => Order | undefined;
+  addOrderToParcel: (orderId: string, parcelId: string) => Promise<{ success: boolean; error?: string }>;
+
+  // Parcel operations (backend: shipment)
+  createParcel: (destinationCity: string) => Promise<Parcel>;
+  closeParcel: (parcelId: string) => Promise<{ success: boolean; error?: string }>;
+  dispatchParcel: (parcelId: string, riderId: string, vehicleNumber: string) => Promise<{ success: boolean; error?: string }>;
+  receiveParcel: (qrCode: string) => Promise<{ success: boolean; parcel?: Parcel; error?: string }>;
+  openParcel: (parcelId: string) => Promise<{ success: boolean; error?: string }>;
+  getParcelByQr: (qrCode: string) => Parcel | undefined;
+
+  // Dashboard
   getDashboardStats: () => DashboardStats;
+  dashboardStats: DashboardStats | null;
 }
 
 const WarehouseContext = createContext<WarehouseContextType | undefined>(undefined);
 
-// Initialize with some mock orders
-const INITIAL_ORDERS: Order[] = [
-  { id: 'ORD-ABC123', qrCode: 'ORD-ABC123', currentCity: 'Mumbai', nextDestination: 'Delhi', routeSequence: 1, status: 'PENDING' },
-  { id: 'ORD-DEF456', qrCode: 'ORD-DEF456', currentCity: 'Mumbai', nextDestination: 'Delhi', routeSequence: 2, status: 'PENDING' },
-  { id: 'ORD-GHI789', qrCode: 'ORD-GHI789', currentCity: 'Mumbai', nextDestination: 'Bangalore', routeSequence: 1, status: 'PENDING' },
-  { id: 'ORD-JKL012', qrCode: 'ORD-JKL012', currentCity: 'Delhi', nextDestination: 'Chennai', routeSequence: 1, status: 'PENDING' },
-  { id: 'ORD-MNO345', qrCode: 'ORD-MNO345', currentCity: 'Mumbai', nextDestination: 'Delhi', routeSequence: 3, status: 'RECEIVED', receivedAt: new Date() },
-];
-
 export function WarehouseProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [currentWarehouse, setCurrentWarehouse] = useState<Warehouse | null>(null);
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
+  const [currentWarehouseId, setCurrentWarehouseId] = useState<string | null>(null);
+  const [backendWarehouses, setBackendWarehouses] = useState<BackendWarehouse[]>([]);
+  const [isLoadingWarehouses, setIsLoadingWarehouses] = useState(true);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [parcels, setParcels] = useState<Parcel[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+
+  // Derive current warehouse and mapped list
+  const currentWarehouse = backendWarehouses.find(w => w.id === currentWarehouseId) ?? null;
+  const warehouses: Warehouse[] = useMemo(() => backendWarehouses.map(w => ({
+    id: w.id,
+    name: w.name,
+    city: w.city,
+    state: w.state,
+    address: w.address,
+    lat: w.lat,
+    lng: w.lng,
+    type: w.type,
+    status: w.status,
+  })), [backendWarehouses]);
+
+  // Build warehouse map for quick lookup
+  const warehouseMap = useMemo(
+    () => Object.fromEntries(backendWarehouses.map(w => [w.id, w])),
+    [backendWarehouses]
+  );
+
+  // Load warehouses on mount
+  useEffect(() => {
+    warehouseApi.list()
+      .then(data => setBackendWarehouses(data))
+      .catch(err => {
+        console.error('Failed to load warehouses', err);
+        setBackendWarehouses([]);
+      })
+      .finally(() => setIsLoadingWarehouses(false));
+  }, []);
+
+  const createDashboardStats = (override: Partial<DashboardStats> = {}): DashboardStats => ({
+    warehouseId: currentWarehouse?.id,
+    warehouseName: currentWarehouse?.name,
+    city: currentWarehouse?.city,
+    ordersReceivedToday: 0,
+    ordersWaitingForBagging: 0,
+    parcelsReadyToDispatch: 0,
+    parcelsCreated: 0,
+    parcelsAwaitingPickup: 0,
+    parcelsAtWarehouse: 0,
+    parcelsInShipment: 0,
+    parcelsOutForDelivery: 0,
+    parcelsDelivered: 0,
+    shipmentsCreated: 0,
+    parcelsInTransit: 0,
+    shipmentsInTransit: 0,
+    shipmentsArrived: 0,
+    activeRiders: undefined,
+    ...override,
+  });
+
+  const loadWarehouseData = useCallback(async (warehouseId: string) => {
+    setIsLoadingData(true);
+    try {
+      const [parcelsRes, shipmentsRes, dashboardRes] = await Promise.allSettled([
+        parcelApi.getByWarehouse(warehouseId, 'AT_WAREHOUSE'),
+        shipmentApi.getByWarehouse(warehouseId),
+        warehouseApi.getDashboard(warehouseId),
+      ]);
+
+      if (parcelsRes.status === 'fulfilled') {
+        setOrders(parcelsRes.value.data.map(p => mapBackendParcelToOrder(p, warehouseMap)));
+      } else {
+        console.error('Failed to load parcels:', parcelsRes.reason);
+      }
+
+      if (shipmentsRes.status === 'fulfilled') {
+        setParcels(shipmentsRes.value.data.map(s => mapBackendShipmentToParcel(s)));
+      } else {
+        console.error('Failed to load shipments:', shipmentsRes.reason);
+        setParcels([]); // Set empty array as fallback
+      }
+
+      if (dashboardRes.status === 'fulfilled') {
+        const d = dashboardRes.value;
+        setDashboardStats(createDashboardStats({
+          warehouseId: d.warehouseId,
+          warehouseName: d.warehouseName,
+          city: d.city,
+          ordersReceivedToday: d.parcelsAtWarehouse,
+          ordersWaitingForBagging: d.parcelsInShipment,
+          parcelsReadyToDispatch: d.shipmentsCreated,
+          parcelsCreated: d.parcelsCreated,
+          parcelsAwaitingPickup: d.parcelsAwaitingPickup,
+          parcelsAtWarehouse: d.parcelsAtWarehouse,
+          parcelsInShipment: d.parcelsInShipment,
+          parcelsOutForDelivery: d.parcelsOutForDelivery,
+          parcelsDelivered: d.parcelsDelivered,
+          shipmentsCreated: d.shipmentsCreated,
+          shipmentsInTransit: d.shipmentsInTransit,
+          shipmentsArrived: d.shipmentsArrived,
+          parcelsInTransit: d.shipmentsInTransit,
+          activeRiders: d.activeRiders,
+        }));
+      } else {
+        console.error('Dashboard API failed:', dashboardRes.reason);
+      }
+    } catch (err) {
+      console.error('Failed to load warehouse data', err);
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [warehouseMap, currentWarehouse]);
+
+  useEffect(() => {
+    if (currentWarehouseId) {
+      loadWarehouseData(currentWarehouseId);
+    }
+  }, [currentWarehouseId, loadWarehouseData]);
+
+  const refreshData = useCallback(async () => {
+    if (currentWarehouseId) await loadWarehouseData(currentWarehouseId);
+  }, [currentWarehouseId, loadWarehouseData]);
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
 
   const login = async (email: string, password: string): Promise<boolean> => {
-    // Mock login - accept any email/password for demo
-    if (email && password) {
-      setUser({
-        id: 'user-1',
-        email,
-        role: email.includes('manager') ? 'MANAGER' : 'OPERATOR',
-      });
-      return true;
-    }
-    return false;
+    if (!email || !password) return false;
+    setUser({
+      id: 'user-1',
+      email,
+      role: email.includes('manager') ? 'MANAGER' : 'OPERATOR',
+    });
+    return true;
   };
 
   const logout = () => {
     setUser(null);
-    setCurrentWarehouse(null);
+    setCurrentWarehouseId(null);
+    setOrders([]);
+    setParcels([]);
+    setDashboardStats(null);
   };
+
+  // ── Warehouse ─────────────────────────────────────────────────────────────
 
   const selectWarehouse = (warehouseId: string) => {
-    const warehouse = MOCK_WAREHOUSES.find(w => w.id === warehouseId);
-    if (warehouse) {
-      setCurrentWarehouse(warehouse);
+    setCurrentWarehouseId(warehouseId);
+  };
+
+  // ── Order operations ──────────────────────────────────────────────────────
+
+  const receiveOrder = async (qrCode: string): Promise<ReceiveOrderResult> => {
+    try {
+      const res = await parcelApi.getById(qrCode);
+      const parcel = res.data;
+
+      if (!parcel) return { success: false, error: 'Order not found' };
+
+      const order = mapBackendParcelToOrder(parcel, warehouseMap);
+
+      // Already at this warehouse
+      if (parcel.status === 'AT_WAREHOUSE') {
+        if (currentWarehouse && parcel.currentWarehouseId !== currentWarehouseId) {
+          return { success: false, error: `Order is at a different warehouse` };
+        }
+        setOrders(prev => {
+          const exists = prev.find(o => o.id === order.id);
+          return exists ? prev.map(o => o.id === order.id ? order : o) : [...prev, order];
+        });
+        return { success: true, order };
+      }
+
+      // Parcel is with a rider coming to this warehouse — initiate warehouse-in
+      if (parcel.status === 'PICKED_BY_RIDER') {
+        await parcelApi.initiateWarehouseIn(qrCode);
+        return { success: true, order, needsOtp: true };
+      }
+
+      return { success: false, error: `Order status is ${parcel.status} — cannot receive now` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to receive order';
+      return { success: false, error: msg };
     }
   };
 
-  const receiveOrder = (qrCode: string): { success: boolean; order?: Order; error?: string } => {
-    const order = orders.find(o => o.qrCode === qrCode);
-    
-    if (!order) {
-      return { success: false, error: 'Invalid QR code - Order not found' };
-    }
-    
-    if (order.status === 'RECEIVED' || order.status === 'IN_PARCEL') {
-      return { success: false, error: 'Order already received at warehouse' };
-    }
-    
-    if (order.currentCity !== currentWarehouse?.city) {
-      return { success: false, error: `Order belongs to ${order.currentCity}, not ${currentWarehouse?.city}` };
-    }
+  const confirmWarehouseIn = async (
+    parcelId: string,
+    otp: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await parcelApi.verifyWarehouseIn(parcelId, otp, user?.id ?? 'operator');
+      if (!res.data.verified) return { success: false, error: 'Invalid OTP' };
 
-    const updatedOrder = { ...order, status: 'RECEIVED' as const, receivedAt: new Date() };
-    setOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
-    
-    return { success: true, order: updatedOrder };
+      // Refresh the order in local state
+      const updated = await parcelApi.getById(parcelId);
+      const order = mapBackendParcelToOrder(updated.data, warehouseMap);
+      setOrders(prev => {
+        const exists = prev.find(o => o.id === order.id);
+        return exists ? prev.map(o => o.id === order.id ? order : o) : [...prev, order];
+      });
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'OTP verification failed';
+      return { success: false, error: msg };
+    }
   };
 
-  const createParcel = (destinationCity: string): Parcel => {
-    const parcel: Parcel = {
-      id: generateParcelId(),
-      qrCode: generateParcelId(),
-      destinationCity,
-      currentWarehouse: currentWarehouse?.city || '',
-      orders: [],
-      status: 'OPEN',
-      createdAt: new Date(),
-    };
-    setParcels(prev => [...prev, parcel]);
-    return parcel;
-  };
+  const getOrderByQr = (qrCode: string) => orders.find(o => o.qrCode === qrCode);
 
-  const addOrderToParcel = (orderId: string, parcelId: string): { success: boolean; error?: string } => {
+  const addOrderToParcel = async (
+    orderId: string,
+    parcelId: string
+  ): Promise<{ success: boolean; error?: string }> => {
     const order = orders.find(o => o.id === orderId);
     const parcel = parcels.find(p => p.id === parcelId);
 
     if (!order) return { success: false, error: 'Order not found' };
     if (!parcel) return { success: false, error: 'Parcel not found' };
     if (parcel.status !== 'OPEN') return { success: false, error: 'Parcel is already closed' };
-    if (order.status === 'IN_PARCEL') return { success: false, error: 'Order already in a parcel' };
-    if (order.nextDestination !== parcel.destinationCity) {
-      return { success: false, error: `Order destination (${order.nextDestination}) doesn't match parcel destination (${parcel.destinationCity})` };
-    }
-    if (parcel.orders.includes(orderId)) {
-      return { success: false, error: 'Order already added to this parcel' };
-    }
 
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'IN_PARCEL' as const, parcelId } : o));
-    setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, orders: [...p.orders, orderId] } : p));
-
-    return { success: true };
+    try {
+      await shipmentApi.addParcels(parcelId, [orderId]);
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'IN_PARCEL' as const, parcelId } : o));
+      setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, orders: [...p.orders, orderId] } : p));
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to add order to parcel';
+      return { success: false, error: msg };
+    }
   };
 
-  const closeParcel = (parcelId: string): { success: boolean; error?: string } => {
+  // ── Parcel operations (= backend shipments) ───────────────────────────────
+
+  const createParcel = async (destinationCity: string): Promise<Parcel> => {
+    if (!currentWarehouse) throw new Error('No warehouse selected');
+
+    const destWarehouse = backendWarehouses.find(
+      w => w.city.toLowerCase() === destinationCity.toLowerCase()
+    );
+    if (!destWarehouse) throw new Error(`No warehouse found for city: ${destinationCity}`);
+
+    const now = new Date().toISOString();
+    const eta = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const res = await shipmentApi.create({
+      shipmentType: 'LAST_MILE',
+      originWarehouseId: currentWarehouseId!,
+      destinationWarehouseId: destWarehouse.id,
+      departureTimeEst: now,
+      arrivalTimeEst: eta,
+    });
+
+    const newParcel = mapBackendShipmentToParcel(res.data);
+    setParcels(prev => [...prev, newParcel]);
+    return newParcel;
+  };
+
+  const closeParcel = async (parcelId: string): Promise<{ success: boolean; error?: string }> => {
     const parcel = parcels.find(p => p.id === parcelId);
-    
     if (!parcel) return { success: false, error: 'Parcel not found' };
     if (parcel.orders.length === 0) return { success: false, error: 'Cannot close empty parcel' };
 
-    setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, status: 'READY_TO_DISPATCH' as const } : p));
-    return { success: true };
+    try {
+      await shipmentApi.updateStatus(parcelId, 'ASSIGNED');
+      setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, status: 'READY_TO_DISPATCH' as const } : p));
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to close parcel';
+      return { success: false, error: msg };
+    }
   };
 
-  const dispatchParcel = (parcelId: string, riderId: string, vehicleNumber: string): { success: boolean; error?: string } => {
+  const dispatchParcel = async (
+    parcelId: string,
+    riderId: string,
+    _vehicleNumber: string
+  ): Promise<{ success: boolean; error?: string }> => {
     const parcel = parcels.find(p => p.id === parcelId);
-    
     if (!parcel) return { success: false, error: 'Parcel not found' };
-    if (parcel.status !== 'READY_TO_DISPATCH') return { success: false, error: 'Parcel is not ready for dispatch' };
+    if (parcel.status !== 'READY_TO_DISPATCH') return { success: false, error: 'Parcel not ready for dispatch' };
 
-    setParcels(prev => prev.map(p => p.id === parcelId ? { 
-      ...p, 
-      status: 'DISPATCHED' as const, 
-      dispatchedAt: new Date(),
-      riderId,
-      vehicleNumber 
-    } : p));
+    try {
+      // Assign delivery rider to each parcel in the shipment
+      if (riderId) {
+        await Promise.allSettled(
+          parcel.orders.map(orderId => parcelApi.assignDeliveryRider(orderId, riderId))
+        );
+      }
 
-    // Update orders status
-    setOrders(prev => prev.map(o => 
-      parcel.orders.includes(o.id) ? { ...o, status: 'DISPATCHED' as const } : o
-    ));
+      await shipmentApi.updateStatus(parcelId, 'IN_TRANSIT');
 
-    return { success: true };
+      setParcels(prev => prev.map(p =>
+        p.id === parcelId
+          ? { ...p, status: 'DISPATCHED' as const, dispatchedAt: new Date(), riderId }
+          : p
+      ));
+      setOrders(prev => prev.map(o =>
+        parcel.orders.includes(o.id) ? { ...o, status: 'DISPATCHED' as const } : o
+      ));
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to dispatch parcel';
+      return { success: false, error: msg };
+    }
   };
 
-  const receiveParcel = (qrCode: string): { success: boolean; parcel?: Parcel; error?: string } => {
-    const parcel = parcels.find(p => p.qrCode === qrCode);
-    
-    if (!parcel) return { success: false, error: 'Invalid QR - Parcel not found' };
-    if (parcel.status !== 'DISPATCHED') return { success: false, error: 'Parcel has not been dispatched' };
+  const receiveParcel = async (
+    qrCode: string
+  ): Promise<{ success: boolean; parcel?: Parcel; error?: string }> => {
+    try {
+      const res = await shipmentApi.getById(qrCode);
+      const shipment = res.data;
 
-    const updatedParcel = { ...parcel, status: 'RECEIVED' as const, currentWarehouse: currentWarehouse?.city || '' };
-    setParcels(prev => prev.map(p => p.id === parcel.id ? updatedParcel : p));
+      if (!shipment) return { success: false, error: 'Parcel not found' };
+      if (shipment.status !== 'IN_TRANSIT') {
+        return { success: false, error: `Parcel status is ${shipment.status} — not in transit` };
+      }
 
-    return { success: true, parcel: updatedParcel };
+      await shipmentApi.updateStatus(qrCode, 'ARRIVED');
+
+      const parcel = mapBackendShipmentToParcel({ ...shipment, status: 'ARRIVED' });
+      parcel.currentWarehouse = currentWarehouse?.city ?? parcel.currentWarehouse;
+      setParcels(prev => {
+        const exists = prev.find(p => p.id === parcel.id);
+        return exists
+          ? prev.map(p => p.id === parcel.id ? parcel : p)
+          : [...prev, parcel];
+      });
+      return { success: true, parcel };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to receive parcel';
+      return { success: false, error: msg };
+    }
   };
 
-  const openParcel = (parcelId: string): { success: boolean; error?: string } => {
+  const openParcel = async (parcelId: string): Promise<{ success: boolean; error?: string }> => {
     const parcel = parcels.find(p => p.id === parcelId);
-    
     if (!parcel) return { success: false, error: 'Parcel not found' };
     if (parcel.status !== 'RECEIVED') return { success: false, error: 'Can only open received parcels' };
 
-    // Update orders to be available for next routing
-    setOrders(prev => prev.map(o => 
-      parcel.orders.includes(o.id) ? { 
-        ...o, 
-        status: 'RECEIVED' as const, 
-        currentCity: currentWarehouse?.city || o.currentCity,
-        parcelId: undefined 
-      } : o
+    // Orders inside become available again at this warehouse
+    setOrders(prev => prev.map(o =>
+      parcel.orders.includes(o.id)
+        ? { ...o, status: 'RECEIVED' as const, currentCity: currentWarehouse?.city ?? o.currentCity, parcelId: undefined }
+        : o
     ));
-
-    // Remove parcel after opening
     setParcels(prev => prev.filter(p => p.id !== parcelId));
-
     return { success: true };
   };
 
   const getParcelByQr = (qrCode: string) => parcels.find(p => p.qrCode === qrCode);
-  const getOrderByQr = (qrCode: string) => orders.find(o => o.qrCode === qrCode);
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────
 
   const getDashboardStats = (): DashboardStats => {
+    if (dashboardStats) return dashboardStats;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-
-    return {
-      ordersReceivedToday: orders.filter(o => 
-        o.receivedAt && new Date(o.receivedAt) >= today && o.currentCity === currentWarehouse?.city
+    return createDashboardStats({
+      warehouseId: currentWarehouse?.id,
+      warehouseName: currentWarehouse?.name,
+      city: currentWarehouse?.city,
+      ordersReceivedToday: orders.filter(o =>
+        o.receivedAt && new Date(o.receivedAt) >= today
       ).length,
-      ordersWaitingForBagging: orders.filter(o => 
+      ordersWaitingForBagging: orders.filter(o =>
         o.status === 'RECEIVED' && o.currentCity === currentWarehouse?.city
       ).length,
-      parcelsReadyToDispatch: parcels.filter(p => 
+      parcelsReadyToDispatch: parcels.filter(p =>
         p.status === 'READY_TO_DISPATCH' && p.currentWarehouse === currentWarehouse?.city
       ).length,
-    };
+    });
   };
 
   return (
     <WarehouseContext.Provider value={{
       user,
       currentWarehouse,
-      warehouses: MOCK_WAREHOUSES,
+      warehouses,
       orders,
       parcels,
+      isLoadingWarehouses,
+      isLoadingData,
       login,
       logout,
       selectWarehouse,
+      refreshData,
       receiveOrder,
-      createParcel,
+      confirmWarehouseIn,
+      getOrderByQr,
       addOrderToParcel,
+      createParcel,
       closeParcel,
       dispatchParcel,
       receiveParcel,
       openParcel,
       getParcelByQr,
-      getOrderByQr,
       getDashboardStats,
+      dashboardStats,
     }}>
       {children}
     </WarehouseContext.Provider>

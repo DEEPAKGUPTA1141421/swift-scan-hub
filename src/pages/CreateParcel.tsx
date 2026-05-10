@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Package, PackagePlus, X, Check, MapPin } from 'lucide-react';
+import { Package, PackagePlus, X, Check, MapPin, Loader2 } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
@@ -17,111 +17,120 @@ import {
 import { Parcel } from '@/types/warehouse';
 import { toast } from 'sonner';
 
-const CITIES = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Kolkata', 'Hyderabad', 'Pune'];
-
 export default function CreateParcel() {
   const [searchParams] = useSearchParams();
   const [selectedDestination, setSelectedDestination] = useState(searchParams.get('destination') || '');
   const [activeParcel, setActiveParcel] = useState<Parcel | null>(null);
   const [scannedOrders, setScannedOrders] = useState<string[]>([]);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const navigate = useNavigate();
-  
-  const { 
-    createParcel, 
-    addOrderToParcel, 
-    closeParcel, 
-    getOrderByQr, 
+
+  const {
+    createParcel,
+    addOrderToParcel,
+    closeParcel,
+    getOrderByQr,
     orders,
-    currentWarehouse 
+    currentWarehouse,
+    warehouses,
   } = useWarehouse();
 
   const initialOrderId = searchParams.get('orderId');
 
+  // Available destinations: all warehouses except current
+  const availableWarehouses = warehouses.filter(w => w.city !== currentWarehouse?.city);
+
   useEffect(() => {
     if (initialOrderId && selectedDestination && !activeParcel) {
-      handleCreateParcel();
+      void handleCreateParcel();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCreateParcel = () => {
+  const handleCreateParcel = async () => {
     if (!selectedDestination) {
       toast.error('Please select a destination city');
       return;
     }
 
-    const parcel = createParcel(selectedDestination);
-    setActiveParcel(parcel);
-    setScannedOrders([]);
-    toast.success(`Parcel ${parcel.id} created`);
+    setIsCreating(true);
+    try {
+      const parcel = await createParcel(selectedDestination);
+      setActiveParcel(parcel);
+      setScannedOrders([]);
+      toast.success(`Shipment ${parcel.id.slice(0, 8)}… created`);
 
-    // If there's an initial order, add it
-    if (initialOrderId) {
-      setTimeout(() => handleScanOrder(initialOrderId), 100);
+      if (initialOrderId) {
+        setTimeout(() => void handleScanOrder(initialOrderId), 100);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create shipment';
+      toast.error(msg);
+    } finally {
+      setIsCreating(false);
     }
   };
 
-  const handleScanOrder = (qrCode: string) => {
+  const handleScanOrder = async (qrCode: string) => {
     if (!activeParcel) {
-      toast.error('Create a parcel first');
+      toast.error('Create a shipment first');
       return;
     }
 
     const order = getOrderByQr(qrCode);
-    
+
     if (!order) {
-      toast.error('Order not found - scan it at Receive Orders first');
+      toast.error('Order not found — scan it at Receive Orders first');
       return;
     }
-
     if (scannedOrders.includes(order.id)) {
-      toast.error('Order already scanned in this parcel');
+      toast.error('Order already scanned in this shipment');
       return;
     }
-
     if (order.status !== 'RECEIVED') {
-      toast.error(`Order status is ${order.status} - must be RECEIVED first`);
+      toast.error(`Order status is ${order.status} — must be RECEIVED first`);
       return;
     }
 
-    const result = addOrderToParcel(order.id, activeParcel.id);
-    
+    const result = await addOrderToParcel(order.id, activeParcel.id);
+
     if (result.success) {
       setScannedOrders(prev => [...prev, order.id]);
-      toast.success(`Order ${order.id} added`);
+      toast.success(`Order added`);
     } else {
-      toast.error(result.error || 'Failed to add order');
+      toast.error(result.error ?? 'Failed to add order');
     }
   };
 
-  const handleCloseParcel = () => {
+  const handleCloseParcel = async () => {
     if (!activeParcel) return;
 
-    const result = closeParcel(activeParcel.id);
-    
+    setIsClosing(true);
+    const result = await closeParcel(activeParcel.id);
+    setIsClosing(false);
+
     if (result.success) {
-      toast.success('Parcel closed and ready for dispatch');
+      toast.success('Shipment closed and ready for dispatch');
       setShowCloseDialog(false);
       navigate('/dispatch');
     } else {
-      toast.error(result.error || 'Failed to close parcel');
+      toast.error(result.error ?? 'Failed to close shipment');
     }
   };
 
   const handleRemoveOrder = (orderId: string) => {
-    // Note: In a real app, this would update the backend
     setScannedOrders(prev => prev.filter(id => id !== orderId));
-    toast.info('Order removed from parcel');
+    toast.info('Order removed from shipment');
   };
-
-  const availableCities = CITIES.filter(city => city !== currentWarehouse?.city);
 
   return (
     <Layout>
-      <PageHeader 
-        title="Create Parcel" 
+      <PageHeader
+        title="Create Shipment"
         subtitle="Bag orders for next destination"
-        backTo="/dashboard" 
+        backTo="/dashboard"
       />
 
       <div className="max-w-xl mx-auto space-y-8">
@@ -137,9 +146,9 @@ export default function CreateParcel() {
                   <SelectValue placeholder="Select destination" />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableCities.map(city => (
-                    <SelectItem key={city} value={city} className="py-3 text-base">
-                      {city}
+                  {availableWarehouses.map(w => (
+                    <SelectItem key={w.id} value={w.city} className="py-3 text-base">
+                      {w.name} — {w.city}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -147,17 +156,21 @@ export default function CreateParcel() {
             </div>
 
             <Button
-              onClick={handleCreateParcel}
-              disabled={!selectedDestination}
+              onClick={() => void handleCreateParcel()}
+              disabled={!selectedDestination || isCreating}
               className="w-full h-14 text-lg font-semibold"
             >
-              <PackagePlus className="w-6 h-6 mr-2" />
-              Create New Parcel
+              {isCreating ? (
+                <Loader2 className="w-6 h-6 mr-2 animate-spin" />
+              ) : (
+                <PackagePlus className="w-6 h-6 mr-2" />
+              )}
+              {isCreating ? 'Creating…' : 'Create New Shipment'}
             </Button>
           </div>
         ) : (
           <>
-            {/* Active Parcel Header */}
+            {/* Active Shipment Header */}
             <div className="bg-primary/10 border-2 border-primary rounded-xl p-6">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -165,8 +178,8 @@ export default function CreateParcel() {
                     <Package className="w-6 h-6 text-primary-foreground" />
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Parcel ID</p>
-                    <p className="text-xl font-bold font-mono">{activeParcel.id}</p>
+                    <p className="text-sm text-muted-foreground">Shipment ID</p>
+                    <p className="text-lg font-bold font-mono">{activeParcel.id.slice(0, 8)}…</p>
                   </div>
                 </div>
                 <div className="text-right">
@@ -174,7 +187,7 @@ export default function CreateParcel() {
                   <p className="text-xl font-bold">{activeParcel.destinationCity}</p>
                 </div>
               </div>
-              
+
               <div className="flex items-center justify-center gap-2 py-3 bg-card rounded-lg">
                 <span className="text-4xl font-bold">{scannedOrders.length}</span>
                 <span className="text-muted-foreground">orders scanned</span>
@@ -182,16 +195,16 @@ export default function CreateParcel() {
             </div>
 
             {/* Scan Input */}
-            <ScanInput 
-              onScan={handleScanOrder} 
-              placeholder="Scan Order QR to add" 
+            <ScanInput
+              onScan={qr => void handleScanOrder(qr)}
+              placeholder="Scan Order QR to add"
             />
 
             {/* Scanned Orders List */}
             {scannedOrders.length > 0 && (
               <div className="bg-card border border-border rounded-xl overflow-hidden">
                 <div className="p-4 border-b border-border bg-secondary/50">
-                  <h3 className="font-bold">Orders in Parcel</h3>
+                  <h3 className="font-bold">Orders in Shipment</h3>
                 </div>
                 <div className="divide-y divide-border">
                   {scannedOrders.map(orderId => {
@@ -199,14 +212,16 @@ export default function CreateParcel() {
                     return (
                       <div key={orderId} className="p-4 flex items-center justify-between">
                         <div>
-                          <p className="font-mono font-bold">{orderId}</p>
+                          <p className="font-mono font-bold text-sm">{orderId.slice(0, 12)}…</p>
                           {order && (
                             <p className="text-sm text-muted-foreground">
-                              Route step {order.routeSequence}
+                              {order.currentCity} → {order.nextDestination}
                             </p>
                           )}
                         </div>
                         <button
+                          type="button"
+                          aria-label="Remove order"
                           onClick={() => handleRemoveOrder(orderId)}
                           className="p-2 hover:bg-destructive/10 rounded-lg text-destructive transition-colors"
                         >
@@ -219,14 +234,14 @@ export default function CreateParcel() {
               </div>
             )}
 
-            {/* Close Parcel Button */}
+            {/* Close Shipment Button */}
             <Button
               onClick={() => setShowCloseDialog(true)}
-              disabled={scannedOrders.length === 0}
+              disabled={scannedOrders.length === 0 || isClosing}
               className="w-full h-14 text-lg font-semibold bg-success hover:bg-success/90"
             >
               <Check className="w-6 h-6 mr-2" />
-              Close Parcel & Mark Ready
+              Close Shipment & Mark Ready
             </Button>
           </>
         )}
@@ -235,10 +250,10 @@ export default function CreateParcel() {
       <ConfirmDialog
         open={showCloseDialog}
         onOpenChange={setShowCloseDialog}
-        title="Close Parcel?"
-        description={`This parcel contains ${scannedOrders.length} orders going to ${activeParcel?.destinationCity}. Once closed, it will be ready for dispatch.`}
+        title="Close Shipment?"
+        description={`This shipment contains ${scannedOrders.length} orders going to ${activeParcel?.destinationCity}. Once closed, it will be ready for dispatch.`}
         confirmLabel="Close & Mark Ready"
-        onConfirm={handleCloseParcel}
+        onConfirm={() => void handleCloseParcel()}
       />
     </Layout>
   );

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Warehouse, ChevronRight } from 'lucide-react';
+import { Warehouse, ChevronRight, Loader2 } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,8 +14,9 @@ import { toast } from 'sonner';
 
 export default function SelectWarehouse() {
   const [selectedId, setSelectedId] = useState('');
-  const { warehouses, selectWarehouse, user } = useWarehouse();
+  const { warehouses, selectWarehouse, user, isLoadingWarehouses } = useWarehouse();
   const navigate = useNavigate();
+  const hasWarehouses = warehouses.length > 0;
 
   const handleContinue = () => {
     if (!selectedId) {
@@ -47,9 +48,15 @@ export default function SelectWarehouse() {
         <div className="bg-card border border-border rounded-2xl p-8 shadow-sm space-y-6">
           <div className="space-y-3">
             <label className="text-base font-medium">Warehouse</label>
-            <Select value={selectedId} onValueChange={setSelectedId}>
+            <Select
+              value={selectedId}
+              onValueChange={setSelectedId}
+              disabled={isLoadingWarehouses || !hasWarehouses}
+            >
               <SelectTrigger className="h-14 text-base">
-                <SelectValue placeholder="Select a warehouse" />
+                <SelectValue
+                  placeholder={isLoadingWarehouses ? 'Loading warehouses...' : 'Select a warehouse'}
+                />
               </SelectTrigger>
               <SelectContent>
                 {warehouses.map((wh) => (
@@ -62,11 +69,22 @@ export default function SelectWarehouse() {
                 ))}
               </SelectContent>
             </Select>
+            {isLoadingWarehouses && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading warehouse options
+              </p>
+            )}
+            {!isLoadingWarehouses && !hasWarehouses && (
+              <p className="text-sm text-destructive">
+                No warehouses found. Please check that the backend is running and has warehouse records.
+              </p>
+            )}
           </div>
 
           <Button
             onClick={handleContinue}
-            disabled={!selectedId}
+            disabled={!selectedId || isLoadingWarehouses}
             className="w-full h-14 text-lg font-semibold"
           >
             Continue

@@ -1,15 +1,30 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, PackagePlus, Truck, PackageCheck, Clock, Send } from 'lucide-react';
+import {
+  Clock,
+  Map,
+  MapPin,
+  Package,
+  PackageCheck,
+  PackagePlus,
+  Send,
+  TrendingUp,
+  Truck,
+  Users,
+  Warehouse as WarehouseIcon,
+} from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
 import { MetricCard } from '@/components/MetricCard';
 import { ActionCard } from '@/components/ActionCard';
 
 export default function Dashboard() {
-  const { user, currentWarehouse, getDashboardStats } = useWarehouse();
+  const { user, currentWarehouse, getDashboardStats, dashboardStats, isLoadingData } = useWarehouse();
   const navigate = useNavigate();
-  const stats = getDashboardStats();
+  const stats = dashboardStats ?? getDashboardStats();
+  const warehouseName = stats.warehouseName ?? currentWarehouse?.name;
+  const warehouseCity = stats.city ?? currentWarehouse?.city;
+  const isDashboardLoading = isLoadingData && !dashboardStats;
 
   useEffect(() => {
     if (!user) {
@@ -27,28 +42,94 @@ export default function Dashboard() {
         <div>
           <h1 className="text-3xl font-bold">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
-            Welcome back, {user.email.split('@')[0]}
+            Welcome back, {user.email.split('@')[0]} - {warehouseName}, {warehouseCity}
           </p>
         </div>
 
-        {/* Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard
-            title="Orders Received Today"
-            value={stats.ordersReceivedToday}
-            icon={PackageCheck}
-          />
-          <MetricCard
-            title="Waiting for Bagging"
-            value={stats.ordersWaitingForBagging}
-            icon={Clock}
-          />
-          <MetricCard
-            title="Ready to Dispatch"
-            value={stats.parcelsReadyToDispatch}
-            icon={Send}
-          />
-        </div>
+        {isDashboardLoading ? (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground animate-pulse">Loading dashboard metrics...</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="h-28 rounded-xl border border-dashed border-muted-foreground/20 bg-muted/10 animate-pulse" />
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Parcel metrics */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricCard
+                title="Parcels Created"
+                value={stats.parcelsCreated ?? 0}
+                icon={PackagePlus}
+              />
+              <MetricCard
+                title="Awaiting Pickup"
+                value={stats.parcelsAwaitingPickup ?? 0}
+                icon={Clock}
+              />
+              <MetricCard
+                title="At Warehouse"
+                value={stats.parcelsAtWarehouse ?? stats.ordersReceivedToday}
+                icon={PackageCheck}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricCard
+                title="In Shipment"
+                value={stats.parcelsInShipment ?? stats.ordersWaitingForBagging}
+                icon={Send}
+              />
+              <MetricCard
+                title="Out for Delivery"
+                value={stats.parcelsOutForDelivery ?? 0}
+                icon={Truck}
+              />
+              <MetricCard
+                title="Delivered"
+                value={stats.parcelsDelivered ?? 0}
+                icon={TrendingUp}
+              />
+            </div>
+
+            {/* Shipment and rider metrics */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricCard
+                title="Shipments Created"
+                value={stats.shipmentsCreated ?? stats.parcelsReadyToDispatch}
+                icon={WarehouseIcon}
+              />
+              <MetricCard
+                title="Shipments In Transit"
+                value={stats.shipmentsInTransit ?? stats.parcelsInTransit ?? 0}
+                icon={Truck}
+              />
+              <MetricCard
+                title="Shipments Arrived"
+                value={stats.shipmentsArrived ?? 0}
+                icon={PackageCheck}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <MetricCard
+                title="Active Riders"
+                value={stats.activeRiders ?? 20}
+                icon={Users}
+              />
+            </div>
+          </>
+        )}
 
         {/* Quick Actions */}
         <div>
@@ -56,28 +137,40 @@ export default function Dashboard() {
           <div className="grid gap-4">
             <ActionCard
               title="Receive Orders"
-              description="Scan order QR codes from riders"
+              description="Scan parcel QR codes from riders arriving at warehouse"
               icon={Package}
               to="/receive-orders"
               variant="primary"
             />
             <ActionCard
-              title="Create Parcel"
-              description="Bag orders for dispatch"
+              title="Create Shipment"
+              description="Bag parcels into a shipment for dispatch"
               icon={PackagePlus}
               to="/create-parcel"
             />
             <ActionCard
-              title="Dispatch Parcel"
-              description="Send parcels to riders/vehicles"
+              title="Dispatch Shipment"
+              description="Send shipments to riders / vehicles"
               icon={Truck}
               to="/dispatch"
             />
             <ActionCard
-              title="Receive Parcel"
-              description="Accept parcels from other warehouses"
+              title="Receive Shipment"
+              description="Accept incoming shipments from other warehouses"
               icon={PackageCheck}
               to="/receive-parcel"
+            />
+            <ActionCard
+              title="Live Delivery Map"
+              description="Real-time rider positions, stop progress, and VRP dispatch"
+              icon={Map}
+              to="/dashboard/live"
+            />
+            <ActionCard
+              title="Service Zones"
+              description="Draw and manage delivery coverage areas for users and sellers"
+              icon={MapPin}
+              to="/zone-manager"
             />
           </div>
         </div>
