@@ -42,12 +42,17 @@ export interface BackendParcel {
   pickupRiderId?: string;
   deliveryRiderId?: string;
   status: BackendParcelStatus;
+  // OTP checkpoint flags — present on all parcel responses
+  sellerPickupOtpVerified: boolean;
+  warehouseInOtpVerified: boolean;
+  warehouseOutOtpVerified: boolean;
+  customerDeliveryOtpVerified: boolean;
   pickedAt?: string;
   arrivedAtWarehouseAt?: string;
   dispatchedAt?: string;
   deliveredAt?: string;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export type BackendShipmentStatus =
@@ -68,13 +73,15 @@ export interface BackendShipment {
   destinationWarehouseId: string;
   originCity: string;
   destinationCity: string;
+  parcelCount?: number;
+  totalWeightKg?: number;
   departureTimeEst: string;
   arrivalTimeEst: string;
   costEstimate?: number;
   status: BackendShipmentStatus;
-  parcels: BackendParcel[];
+  parcels?: BackendParcel[];
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export interface BackendDashboard {
@@ -213,6 +220,152 @@ export const parcelApi = {
       '/api/v1/admin/warehouse/parcels/verify-customer-otp',
       { parcelId, otp, performedBy }
     ),
+
+  update: (parcelId: string, body: {
+    weightKg?: number;
+    dimensions?: string;
+    description?: string;
+    destinationWarehouseId?: string;
+  }) =>
+    apiClient.patch<ApiResponse<BackendParcel>>(
+      `/api/v1/admin/warehouse/parcels/${parcelId}`,
+      body
+    ),
+
+  remove: (parcelId: string) =>
+    apiClient.delete<ApiResponse<null>>(
+      `/api/v1/admin/warehouse/parcels/${parcelId}`
+    ),
+};
+
+// ─── Batch Handover Session APIs ──────────────────────────────────────────
+//
+// Industry-standard flow: one OTP authenticates the rider, admin scans each
+// order barcode, then confirms the whole batch at once.
+
+export interface HandoverSessionStart {
+  sessionId: string;
+  riderName: string;
+  riderPhoneMasked: string;
+  message: string;
+}
+
+export interface ScannedOrderItem {
+  orderNo: string;
+  orderId: string;
+  destCity: string;
+  weightKg: number;
+}
+
+export interface ScanOrderResult {
+  orderNo: string;
+  orderId?: string;
+  accepted: boolean;
+  reason?: string;
+  totalScanned: number;
+  scannedOrders: ScannedOrderItem[];
+}
+
+export interface HandoverSessionStatus {
+  sessionId: string;
+  riderId: string;
+  riderName: string;
+  status: 'PENDING_OTP' | 'ACTIVE' | 'COMPLETED';
+  totalScanned: number;
+  scannedOrders: ScannedOrderItem[];
+}
+
+export interface ConfirmHandoverResult {
+  accepted: number;
+  skipped: number;
+  acceptedOrderNos: string[];
+  skippedOrderNos: string[];
+  errors: string[];
+}
+
+export const handoverApi = {
+  /** Step 1: admin selects rider → OTP SMSd to rider */
+  startSession: (warehouseId: string, riderId: string) =>
+    apiClient.post<ApiResponse<HandoverSessionStart>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/start`,
+      { riderId }
+    ),
+
+  /** Step 2: rider gives OTP to admin → session ACTIVE */
+  verifyOtp: (warehouseId: string, sessionId: string, otp: string) =>
+    apiClient.post<ApiResponse<HandoverSessionStatus>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/${sessionId}/verify-otp`,
+      { otp }
+    ),
+
+  /** Step 3: scan one order barcode (call once per package) */
+  scanOrder: (warehouseId: string, sessionId: string, orderNo: string) =>
+    apiClient.post<ApiResponse<ScanOrderResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/${sessionId}/scan`,
+      { orderNo }
+    ),
+
+  /** Remove a mistakenly scanned order */
+  removeOrder: (warehouseId: string, sessionId: string, orderNo: string) =>
+    apiClient.delete<ApiResponse<ScanOrderResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/${sessionId}/scan/${encodeURIComponent(orderNo)}`
+    ),
+
+  /** Get current session state */
+  getSession: (warehouseId: string, sessionId: string) =>
+    apiClient.get<ApiResponse<HandoverSessionStatus>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/${sessionId}`
+    ),
+
+  /** Step 4: commit all scanned orders to WAREHOUSE status */
+  confirm: (warehouseId: string, sessionId: string) =>
+    apiClient.post<ApiResponse<ConfirmHandoverResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/session/${sessionId}/confirm`,
+      {}
+    ),
+};
+
+// ─── Receive-Order-by-orderNo APIs ────────────────────────────────────────
+//
+// Drives the "Receive Orders" page: admin types an orderNo (e.g. OR123456),
+// the rider gets an OTP via SMS, admin verifies the OTP rider provides.
+
+export interface ReceiveOrderLookup {
+  orderId: string;
+  orderNo: string;
+  orderStatus: string;
+  parcelId?: string;
+  parcelStatus?: BackendParcelStatus;
+  weightKg: number;
+  originCity: string;
+  destCity: string;
+  currentWarehouseId?: string;
+  destinationWarehouseId?: string;
+  riderId?: string;
+  riderName?: string;
+  riderPhoneMasked?: string;
+  canReceive: boolean;
+  alreadyReceived?: boolean;
+  reason?: string;
+}
+
+export const orderReceiveApi = {
+  lookup: (warehouseId: string, orderNo: string) =>
+    apiClient.get<ApiResponse<ReceiveOrderLookup>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/lookup?orderNo=${encodeURIComponent(orderNo)}`
+    ),
+
+  initiate: (warehouseId: string, orderNo: string) =>
+    apiClient.post<ApiResponse<unknown>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/initiate`,
+      { orderNo }
+    ),
+
+  verify: (warehouseId: string, orderNo: string, otp: string, performedBy: string) =>
+    apiClient.post<ApiResponse<BackendParcel>>(
+      `/api/v1/admin/warehouse/${warehouseId}/receive/verify`,
+      { orderNo, otp, performedBy }
+    ),
 };
 
 // ─── Shipment APIs ─────────────────────────────────────────────────────────
@@ -258,6 +411,23 @@ export const shipmentApi = {
       '/api/v1/admin/warehouse/shipments/auto-assign',
       { orderId, createIfMissing }
     ),
+
+  update: (shipmentId: string, body: {
+    vehicleId?: string;
+    shipmentType?: 'LONG_HAUL' | 'INTER_HUB' | 'LAST_MILE';
+    departureTimeEst?: string;
+    arrivalTimeEst?: string;
+    costEstimate?: number;
+  }) =>
+    apiClient.patch<ApiResponse<BackendShipment>>(
+      `/api/v1/admin/warehouse/shipments/${shipmentId}`,
+      body
+    ),
+
+  remove: (shipmentId: string) =>
+    apiClient.delete<ApiResponse<null>>(
+      `/api/v1/admin/warehouse/shipments/${shipmentId}`
+    ),
 };
 
 // ─── VRP APIs ─────────────────────────────────────────────────────────────
@@ -284,7 +454,35 @@ export const vrpApi = {
 
 // ─── Rider / Live Dashboard APIs ──────────────────────────────────────────
 
+export interface RiderAssignmentStop {
+  assignmentId: string;
+  orderId: string;
+  sequenceNumber: number;
+  status: string;
+  destAddress: string;
+  destCity: string;
+  destLat?: number;
+  destLng?: number;
+  weightKg: number;
+}
+
+export interface RiderAssignmentBundle {
+  riderId: string;
+  riderName: string;
+  riderPhone?: string;
+  currentLat: number;
+  currentLng: number;
+  totalStops: number;
+  completed: number;
+  assignments: RiderAssignmentStop[];
+}
+
 export const riderApi = {
+  getRouteAssignments: (warehouseId: string) =>
+    apiClient.get<ApiResponse<RiderAssignmentBundle[]>>(
+      `/api/v1/admin/warehouse/${warehouseId}/route-assignments`
+    ),
+
   getLiveRiders: (warehouseId: string) =>
     apiClient.get<ApiResponse<Array<Record<string, string>>>>(
       `/api/v1/riders/admin/warehouse/${warehouseId}/riders/live`
@@ -340,6 +538,90 @@ export const zoneApi = {
 
   activeForTarget: (type: 'USER' | 'SELLER' = 'USER') =>
     apiClient.get<ServiceZone[]>(`/api/v1/zones/active?type=${type}`),
+};
+
+// ─── Order APIs ────────────────────────────────────────────────────────────
+
+export type BackendOrderStatus =
+  | 'CREATED'
+  | 'PICKUP_SCHEDULED'
+  | 'PICKED'
+  | 'WAREHOUSE'
+  | 'IN_TRANSIT'
+  | 'DELIVERED'
+  | 'CANCELLED'
+  | 'PENDING'
+  | 'ASSIGNED';
+
+export interface BackendOrder {
+  id: string;
+  orderNo: string;
+  originAddress: string;
+  originCity: string;
+  destAddress: string;
+  destCity: string;
+  weightKg: number;
+  status: BackendOrderStatus;
+  serviceType: 'STANDARD' | 'EXPRESS';
+  priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+  wareHouseId?: string;
+  placedAt?: string;
+  createdAt: string;
+  // Rider info (populated by backend when riderId is set)
+  riderId?: string;
+  riderName?: string;
+  riderPhone?: string;
+  riderCity?: string;
+  riderStatus?: string;
+  riderLat?: number;
+  riderLng?: number;
+}
+
+export const orderApi = {
+  getByWarehouse: (warehouseId: string, status?: string) =>
+    apiClient.get<ApiResponse<BackendOrder[]>>(
+      `/api/v1/admin/warehouse/${warehouseId}/orders${status ? `?status=${status}` : ''}`
+    ),
+};
+
+// ─── Route / Tracking APIs ─────────────────────────────────────────────────
+
+export interface TrackingEvent {
+  eventType: string;
+  label: string;
+  warehouseId?: string;
+  warehouseCity?: string;
+  warehouseName?: string;
+  shipmentId?: string;
+  shipmentNo?: string;
+  timestamp?: string;
+  performedBy?: string;
+  completed: boolean;
+}
+
+export interface ParcelTrackingRoute {
+  parcelId: string;
+  orderId: string;
+  orderNo?: string;
+  currentStatus: BackendParcelStatus;
+  events: TrackingEvent[];
+}
+
+export const trackingApi = {
+  getParcelRoute: (parcelId: string) =>
+    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
+      `/api/v1/admin/warehouse/parcels/${parcelId}/route`
+    ),
+
+  getOrderRoute: (orderId: string) =>
+    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
+      `/api/v1/admin/orders/${orderId}/route`
+    ),
+
+  getShipmentRoute: (shipmentId: string) =>
+    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
+      `/api/v1/admin/warehouse/shipments/${shipmentId}/route`
+    ),
 };
 
 // ─── Mapping helpers ───────────────────────────────────────────────────────
@@ -402,6 +684,72 @@ export function mapBackendShipmentToParcel(s: BackendShipment): Parcel {
     orders: s.parcels?.map(p => p.id) ?? [],
     status: mapShipmentStatusToFrontend(s.status),
     createdAt: new Date(s.createdAt),
-    dispatchedAt: s.status === 'IN_TRANSIT' ? new Date(s.updatedAt) : undefined,
+    dispatchedAt: s.status === 'IN_TRANSIT' && s.updatedAt ? new Date(s.updatedAt) : undefined,
   };
 }
+
+// ─── Shipment Planning APIs ────────────────────────────────────────────────
+//
+// Two-phase planning pipeline:
+//   GET  /{warehouseId}/shipment-plan            → generate & cache plan (15 min)
+//   POST /{warehouseId}/shipment-plan/{id}/execute → commit plan to DB
+
+export interface PlannedShipmentGroup {
+  groupIndex: number;
+  destinationWarehouseId: string;
+  destinationWarehouseName: string;
+  destinationCity: string;
+  shipmentType: 'LAST_MILE' | 'INTER_HUB';
+  parcelIds: string[];
+  parcelCount: number;
+  totalWeightKg: number;
+  distanceKm: number;
+  etaSeconds: number;
+  etaFromCache: boolean;
+  departureEst: string;
+  arrivalEst: string;
+  suggestedVehicleId?: string;
+  suggestedVehicleNumber?: string;
+  suggestedVehicleType?: string;
+  suggestedVehicleCapacityKg: number;
+}
+
+export interface ShipmentPlan {
+  planId: string;
+  warehouseId: string;
+  originCity: string;
+  generatedAt: string;
+  totalParcels: number;
+  totalGroups: number;
+  groups: PlannedShipmentGroup[];
+}
+
+export interface ExecuteGroupRequest {
+  groupIndex: number;
+  vehicleId?: string;
+  departureOverride?: string;
+}
+
+export interface ExecutePlanRequest {
+  groups?: ExecuteGroupRequest[];
+}
+
+export interface ExecutePlanResponse {
+  created: number;
+  skipped: number;
+  shipments: BackendShipment[];
+  errors: string[];
+}
+
+export const shipmentPlanApi = {
+  generate: (warehouseId: string) =>
+    apiClient.get<ApiResponse<ShipmentPlan>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-plan`
+    ),
+
+  execute: (warehouseId: string, planId: string, body?: ExecutePlanRequest) =>
+    apiClient.post<ApiResponse<ExecutePlanResponse>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-plan/${planId}/execute`,
+      body ?? {}
+    ),
+};
