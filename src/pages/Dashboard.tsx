@@ -71,16 +71,19 @@ export default function Dashboard() {
                 title="Parcels Created"
                 value={stats.parcelsCreated ?? 0}
                 icon={PackagePlus}
+                to="/parcels?status=CREATED"
               />
               <MetricCard
                 title="Awaiting Pickup"
                 value={stats.parcelsAwaitingPickup ?? 0}
                 icon={Clock}
+                to="/parcels?status=AWAITING_PICKUP"
               />
               <MetricCard
                 title="At Warehouse"
                 value={stats.parcelsAtWarehouse ?? stats.ordersReceivedToday}
                 icon={PackageCheck}
+                to="/parcels?status=AT_WAREHOUSE"
               />
             </div>
 
@@ -89,16 +92,19 @@ export default function Dashboard() {
                 title="In Shipment"
                 value={stats.parcelsInShipment ?? stats.ordersWaitingForBagging}
                 icon={Send}
+                to="/parcels?status=IN_SHIPMENT"
               />
               <MetricCard
                 title="Out for Delivery"
                 value={stats.parcelsOutForDelivery ?? 0}
                 icon={Truck}
+                to="/parcels?status=OUT_FOR_DELIVERY"
               />
               <MetricCard
                 title="Delivered"
                 value={stats.parcelsDelivered ?? 0}
                 icon={TrendingUp}
+                to="/parcels?status=DELIVERED"
               />
             </div>
 
@@ -108,16 +114,19 @@ export default function Dashboard() {
                 title="Shipments Created"
                 value={stats.shipmentsCreated ?? stats.parcelsReadyToDispatch}
                 icon={WarehouseIcon}
+                to="/shipments?status=CREATED"
               />
               <MetricCard
                 title="Shipments In Transit"
                 value={stats.shipmentsInTransit ?? stats.parcelsInTransit ?? 0}
                 icon={Truck}
+                to="/shipments?status=IN_TRANSIT"
               />
               <MetricCard
                 title="Shipments Arrived"
                 value={stats.shipmentsArrived ?? 0}
                 icon={PackageCheck}
+                to="/shipments?status=ARRIVED"
               />
             </div>
 
@@ -126,6 +135,7 @@ export default function Dashboard() {
                 title="Active Riders"
                 value={stats.activeRiders ?? 20}
                 icon={Users}
+                to="/riders"
               />
             </div>
           </>

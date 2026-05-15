@@ -15,6 +15,12 @@ import ReceiveParcel from "./pages/ReceiveParcel";
 import NotFound from "./pages/NotFound";
 import LiveMapDashboard from "./pages/LiveMapDashboard";
 import ZoneManager from "./pages/ZoneManager";
+import WarehouseOps from "./pages/WarehouseOps";
+import Parcels from "./pages/Parcels";
+import Shipments from "./pages/Shipments";
+import Riders from "./pages/Riders";
+import BatchReceive from "./pages/BatchReceive";
+import ShipmentPlanning from "./pages/ShipmentPlanning";
 
 const queryClient = new QueryClient();
 
@@ -36,6 +42,12 @@ const App = () => (
             <Route path="/receive-parcel" element={<ReceiveParcel />} />
             <Route path="/dashboard/live" element={<LiveMapDashboard />} />
             <Route path="/zone-manager" element={<ZoneManager />} />
+            <Route path="/warehouse-ops" element={<WarehouseOps />} />
+            <Route path="/parcels" element={<Parcels />} />
+            <Route path="/shipments" element={<Shipments />} />
+            <Route path="/riders" element={<Riders />} />
+            <Route path="/batch-receive" element={<BatchReceive />} />
+            <Route path="/shipment-planning" element={<ShipmentPlanning />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
