@@ -21,6 +21,7 @@ import Shipments from "./pages/Shipments";
 import Riders from "./pages/Riders";
 import BatchReceive from "./pages/BatchReceive";
 import ShipmentPlanning from "./pages/ShipmentPlanning";
+import DispatchShipment from "./pages/DispatchShipment";
 
 const queryClient = new QueryClient();
 
@@ -48,6 +49,7 @@ const App = () => (
             <Route path="/riders" element={<Riders />} />
             <Route path="/batch-receive" element={<BatchReceive />} />
             <Route path="/shipment-planning" element={<ShipmentPlanning />} />
+            <Route path="/dispatch-shipment" element={<DispatchShipment />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

@@ -20,16 +20,16 @@ import { shipmentApi, BackendShipment, BackendShipmentStatus } from '@/services/
 import { ApiError } from '@/lib/apiClient';
 
 const STATUS_OPTIONS: BackendShipmentStatus[] = [
-  'CREATED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'ARRIVED', 'DELIVERED', 'CANCELLED',
+  'CREATED', 'ASSIGNED', 'DISPATCHED', 'IN_TRANSIT', 'AT_DESTINATION', 'DELIVERED', 'CANCELLED',
 ];
 const TYPE_OPTIONS = ['LONG_HAUL', 'INTER_HUB', 'LAST_MILE'] as const;
 
 const TRANSITIONS: Record<BackendShipmentStatus, BackendShipmentStatus[]> = {
   CREATED: ['ASSIGNED', 'CANCELLED'],
-  ASSIGNED: ['PICKED_UP', 'CANCELLED'],
-  PICKED_UP: ['IN_TRANSIT'],
-  IN_TRANSIT: ['ARRIVED'],
-  ARRIVED: ['DELIVERED'],
+  ASSIGNED: ['DISPATCHED', 'CANCELLED'],
+  DISPATCHED: ['IN_TRANSIT'],
+  IN_TRANSIT: ['AT_DESTINATION'],
+  AT_DESTINATION: ['DELIVERED'],
   DELIVERED: [],
   CANCELLED: [],
 };
@@ -98,6 +98,12 @@ export default function Shipments() {
             className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-800 border border-blue-300 rounded-md px-3 py-1.5 hover:bg-blue-50 transition-colors"
           >
             Plan &amp; Create Shipments →
+          </Link>
+          <Link
+            to="/dispatch-shipment"
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-green-700 hover:text-green-900 border border-green-300 rounded-md px-3 py-1.5 hover:bg-green-50 transition-colors"
+          >
+            Dispatch / Receive Shipments →
           </Link>
         </div>
         <div className="flex flex-wrap items-center gap-2">

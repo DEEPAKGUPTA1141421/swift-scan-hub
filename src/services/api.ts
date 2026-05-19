@@ -58,9 +58,9 @@ export interface BackendParcel {
 export type BackendShipmentStatus =
   | 'CREATED'
   | 'ASSIGNED'
-  | 'PICKED_UP'
+  | 'DISPATCHED'
   | 'IN_TRANSIT'
-  | 'ARRIVED'
+  | 'AT_DESTINATION'
   | 'DELIVERED'
   | 'CANCELLED';
 
@@ -69,6 +69,7 @@ export interface BackendShipment {
   shipmentNo: string;
   shipmentType: 'LONG_HAUL' | 'INTER_HUB' | 'LAST_MILE';
   vehicleId?: string;
+  riderId?: string;
   originWarehouseId: string;
   destinationWarehouseId: string;
   originCity: string;
@@ -687,6 +688,118 @@ export function mapBackendShipmentToParcel(s: BackendShipment): Parcel {
     dispatchedAt: s.status === 'IN_TRANSIT' && s.updatedAt ? new Date(s.updatedAt) : undefined,
   };
 }
+
+// ─── Shipment Transfer Session APIs ───────────────────────────────────────
+//
+// Session-based handoff covering every physical transfer in the shipment journey:
+//   DISPATCH_OUT         Warehouse admin → outgoing rider       (ASSIGNED → PICKED_UP)
+//   HAND_TO_VEHICLE      Rider → vehicle/transporter            (PICKED_UP → IN_TRANSIT)
+//   RECEIVE_FROM_VEHICLE Vehicle → destination rider            (IN_TRANSIT → ARRIVED)
+//   RECEIVE_IN           Incoming rider → destination warehouse  (ARRIVED → DELIVERED)
+
+export type ShipmentTransferSessionType =
+  | 'DISPATCH_OUT'
+  | 'HAND_TO_VEHICLE'
+  | 'RECEIVE_FROM_VEHICLE'
+  | 'RECEIVE_IN';
+
+export interface StartShipmentTransferResponse {
+  sessionId: string;
+  sessionType: ShipmentTransferSessionType;
+  partyName: string;
+  partyPhoneMasked: string;
+  message: string;
+}
+
+export interface ScannedShipmentItem {
+  shipmentNo: string;
+  shipmentId: string;
+  originCity: string;
+  destinationCity: string;
+  parcelCount: number;
+  currentStatus: BackendShipmentStatus;
+}
+
+export interface ScanShipmentResult {
+  shipmentNo: string;
+  accepted: boolean;
+  reason?: string;
+  totalScanned: number;
+  scannedShipments: ScannedShipmentItem[];
+}
+
+export interface ShipmentTransferSessionStatus {
+  sessionId: string;
+  sessionType: ShipmentTransferSessionType;
+  riderId?: string;
+  partyName: string;
+  partyPhoneMasked: string;
+  status: 'PENDING_OTP' | 'ACTIVE' | 'COMPLETED';
+  totalScanned: number;
+  scannedShipments: ScannedShipmentItem[];
+}
+
+export interface ConfirmTransferResult {
+  processed: number;
+  skipped: number;
+  processedShipmentNos: string[];
+  skippedShipmentNos: string[];
+  errors: string[];
+}
+
+export const shipmentTransferApi = {
+  /** Step 1 — start a session; OTP sent to receiving party */
+  startSession: (
+    warehouseId: string,
+    body: {
+      sessionType: ShipmentTransferSessionType;
+      /** DISPATCH_OUT only: any shipment number from the batch — rider is auto-resolved from it */
+      referenceShipmentNo?: string;
+      /** RECEIVE_IN only: rider delivering the arriving shipments */
+      riderId?: string;
+      /** HAND_TO_VEHICLE / RECEIVE_FROM_VEHICLE: driver phone + name */
+      partyPhone?: string;
+      partyName?: string;
+    }
+  ) =>
+    apiClient.post<ApiResponse<StartShipmentTransferResponse>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/start`,
+      body
+    ),
+
+  /** Step 2 — receiving party gives OTP to initiator; session becomes ACTIVE */
+  verifyOtp: (warehouseId: string, sessionId: string, otp: string) =>
+    apiClient.post<ApiResponse<ShipmentTransferSessionStatus>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/${sessionId}/verify-otp`,
+      { otp }
+    ),
+
+  /** Step 3 — scan one shipment number (call once per shipment) */
+  scanShipment: (warehouseId: string, sessionId: string, shipmentNo: string) =>
+    apiClient.post<ApiResponse<ScanShipmentResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/${sessionId}/scan`,
+      { shipmentNo }
+    ),
+
+  /** Remove a mistakenly scanned shipment before confirming */
+  removeShipment: (warehouseId: string, sessionId: string, shipmentNo: string) =>
+    apiClient.delete<ApiResponse<ScanShipmentResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/${sessionId}/scan/${encodeURIComponent(shipmentNo)}`
+    ),
+
+  /** Get current session state + scanned list */
+  getSession: (warehouseId: string, sessionId: string) =>
+    apiClient.get<ApiResponse<ShipmentTransferSessionStatus>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/${sessionId}`
+    ),
+
+  /** Step 4 — commit; advance all scanned shipments' status in one shot */
+  confirm: (warehouseId: string, sessionId: string) =>
+    apiClient.post<ApiResponse<ConfirmTransferResult>>(
+      `/api/v1/admin/warehouse/${warehouseId}/shipment-transfer/session/${sessionId}/confirm`,
+      {}
+    ),
+};
 
 // ─── Shipment Planning APIs ────────────────────────────────────────────────
 //
