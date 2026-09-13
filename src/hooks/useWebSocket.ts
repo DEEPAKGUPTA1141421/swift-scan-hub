@@ -3,7 +3,7 @@ import { Client, StompSubscription } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { WsMessage } from '@/types/warehouse';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8083';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://deliveryinventoryservice.onrender.com';
 
 export type WsReadyState = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED';
 

@@ -17,7 +17,7 @@ import {
 // Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-const API_BASE = "http://localhost:8083";
+const API_BASE = "https://deliveryinventoryservice.onrender.com";
 const WS_URL = `${API_BASE}/ws`;
 
 // Hardcoded for the dashboard. In production, picked at login.
