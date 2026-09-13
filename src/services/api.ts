@@ -31,13 +31,13 @@ export type BackendParcelStatus =
 
 export interface BackendParcel {
   id: string;
-  orderId: string;
+  orderId?: string | null;
   weightKg: number;
-  dimensions: string;
-  description: string;
-  originWarehouseId: string;
-  currentWarehouseId: string;
-  destinationWarehouseId: string;
+  dimensions?: string | null;
+  description?: string | null;
+  originWarehouseId?: string | null;
+  currentWarehouseId?: string | null;
+  destinationWarehouseId?: string | null;
   shipmentId?: string;
   pickupRiderId?: string;
   deliveryRiderId?: string;

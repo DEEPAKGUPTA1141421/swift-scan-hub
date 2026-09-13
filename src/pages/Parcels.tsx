@@ -55,7 +55,7 @@ export default function Parcels() {
     if (!search.trim()) return parcels;
     const q = search.toLowerCase();
     return parcels.filter(p =>
-      p.id.toLowerCase().includes(q) || p.orderId.toLowerCase().includes(q)
+      p.id.toLowerCase().includes(q) || (p.orderId ?? '').toLowerCase().includes(q)
     );
   }, [parcels, search]);
 
@@ -127,7 +127,7 @@ export default function Parcels() {
               {filtered.map(p => (
                 <tr key={p.id} className="hover:bg-muted/30">
                   <Td><span className="font-mono text-xs">{p.id.slice(0, 8)}…</span></Td>
-                  <Td><span className="font-mono text-xs">{p.orderId.slice(0, 8)}…</span></Td>
+                  <Td><span className="font-mono text-xs">{p.orderId ? `${p.orderId.slice(0, 8)}…` : '—'}</span></Td>
                   <Td><StatusBadge status={p.status} /></Td>
                   <Td>{p.weightKg.toFixed(1)} kg</Td>
                   <Td className="max-w-[260px] truncate">{p.description ?? '—'}</Td>
@@ -228,7 +228,7 @@ function DetailDialog({
         </DialogHeader>
         {parcel && (
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <DField label="Order">{parcel.orderId}</DField>
+            <DField label="Order">{parcel.orderId ?? '—'}</DField>
             <DField label="Status"><StatusBadge status={parcel.status} /></DField>
             <DField label="Weight">{parcel.weightKg.toFixed(2)} kg</DField>
             <DField label="Dimensions">{parcel.dimensions ?? '—'}</DField>
