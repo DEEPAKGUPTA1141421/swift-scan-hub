@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Warehouse, ChevronRight, Loader2 } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
@@ -29,10 +29,11 @@ export default function SelectWarehouse() {
     navigate('/dashboard');
   };
 
-  if (!user) {
-    navigate('/login');
-    return null;
-  }
+  useEffect(() => {
+    if (!user) navigate('/login');
+  }, [user, navigate]);
+
+  if (!user) return null;
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">

@@ -4,17 +4,17 @@ import { useWarehouse } from '@/context/WarehouseContext';
 
 const Index = () => {
   const navigate = useNavigate();
-  const { user, currentWarehouse } = useWarehouse();
+  const { user, currentWarehouse, isLoadingWarehouses } = useWarehouse();
 
   useEffect(() => {
     if (!user) {
       navigate('/login');
-    } else if (!currentWarehouse) {
-      navigate('/select-warehouse');
-    } else {
+    } else if (currentWarehouse) {
       navigate('/dashboard');
+    } else if (!isLoadingWarehouses) {
+      navigate('/select-warehouse');
     }
-  }, [user, currentWarehouse, navigate]);
+  }, [user, currentWarehouse, isLoadingWarehouses, navigate]);
 
   return null;
 };

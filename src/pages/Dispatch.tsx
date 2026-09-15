@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Truck, Package, MapPin, Hash, User, CheckCircle, Loader2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Truck, Package, MapPin, Hash, User, CheckCircle, Loader2, RefreshCw } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
@@ -8,20 +8,42 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Parcel } from '@/types/warehouse';
+import { vehicleApi, VehicleSummary } from '@/services/api';
+import { ApiError } from '@/lib/apiClient';
 import { toast } from 'sonner';
 
 export default function Dispatch() {
   const [scannedParcel, setScannedParcel] = useState<Parcel | null>(null);
   const [riderId, setRiderId] = useState('');
-  const [vehicleNumber, setVehicleNumber] = useState('');
+  const [vehicleId, setVehicleId] = useState('');
+  const [vehicles, setVehicles] = useState<VehicleSummary[]>([]);
+  const [vehiclesLoading, setVehiclesLoading] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [dispatched, setDispatched] = useState(false);
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [isDispatching, setIsDispatching] = useState(false);
 
   const { getParcelByQr, dispatchParcel, currentWarehouse, refreshData } = useWarehouse();
+
+  const loadVehicles = useCallback(async () => {
+    if (!currentWarehouse?.id) return;
+    setVehiclesLoading(true);
+    try {
+      const res = await vehicleApi.getAvailable(currentWarehouse.id);
+      setVehicles(res.data ?? []);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to load vehicles');
+    } finally {
+      setVehiclesLoading(false);
+    }
+  }, [currentWarehouse?.id]);
+
+  useEffect(() => { loadVehicles(); }, [loadVehicles]);
 
   const handleScan = async (qrCode: string) => {
     setIsLookingUp(true);
@@ -64,19 +86,23 @@ export default function Dispatch() {
 
   const handleDispatch = async () => {
     if (!scannedParcel) return;
-    if (!riderId && !vehicleNumber) {
-      toast.error('Enter Rider ID or Vehicle Number');
+    if (!riderId && !vehicleId) {
+      toast.error('Enter a Rider ID or pick a Vehicle');
       return;
     }
 
     setIsDispatching(true);
-    const result = await dispatchParcel(scannedParcel.id, riderId, vehicleNumber);
+    const result = await dispatchParcel(scannedParcel.id, riderId, vehicleId);
     setIsDispatching(false);
 
     if (result.success) {
       setShowConfirm(false);
       setDispatched(true);
-      toast.success('Shipment dispatched successfully');
+      if (result.error) {
+        toast.warning(result.error);
+      } else {
+        toast.success('Shipment dispatched successfully');
+      }
     } else {
       toast.error(result.error ?? 'Failed to dispatch');
     }
@@ -85,7 +111,7 @@ export default function Dispatch() {
   const handleReset = () => {
     setScannedParcel(null);
     setRiderId('');
-    setVehicleNumber('');
+    setVehicleId('');
     setDispatched(false);
   };
 
@@ -163,21 +189,37 @@ export default function Dispatch() {
               <div className="space-y-2">
                 <Label htmlFor="vehicle" className="text-base flex items-center gap-2">
                   <Truck className="w-4 h-4" />
-                  Vehicle Number
+                  Vehicle
                 </Label>
-                <Input
-                  id="vehicle"
-                  value={vehicleNumber}
-                  onChange={e => setVehicleNumber(e.target.value.toUpperCase())}
-                  placeholder="e.g., MH-12-AB-1234"
-                  className="h-12 text-base uppercase"
-                />
+                <div className="flex gap-2">
+                  <Select value={vehicleId} onValueChange={setVehicleId} disabled={vehiclesLoading}>
+                    <SelectTrigger id="vehicle" className="h-12 text-base flex-1">
+                      <SelectValue placeholder={vehiclesLoading ? 'Loading vehicles…' : 'Select a vehicle (optional)'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {vehicles.map(v => (
+                        <SelectItem key={v.id} value={v.id}>
+                          {v.vehicleNumber} · {v.vehicleType} · {v.capacityKg}kg
+                        </SelectItem>
+                      ))}
+                      {vehicles.length === 0 && !vehiclesLoading && (
+                        <SelectItem value="_none" disabled>No available vehicles</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button" variant="outline" size="icon" className="h-12 w-12 shrink-0"
+                    onClick={loadVehicles} disabled={vehiclesLoading}
+                  >
+                    <RefreshCw className={`w-4 h-4 ${vehiclesLoading ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
               </div>
             </div>
 
             <Button
               onClick={() => setShowConfirm(true)}
-              disabled={(!riderId && !vehicleNumber) || isDispatching}
+              disabled={(!riderId && !vehicleId) || isDispatching}
               className="w-full h-14 text-lg font-semibold"
             >
               <Truck className="w-6 h-6 mr-2" />

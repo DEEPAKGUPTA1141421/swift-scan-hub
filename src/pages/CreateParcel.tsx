@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Package, PackagePlus, X, Check, MapPin, Loader2 } from 'lucide-react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { Package, PackagePlus, X, Check, MapPin, Loader2, Route } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
 import { ScanInput } from '@/components/ScanInput';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { QrCodePanel } from '@/components/QrCodePanel';
 import {
   Select,
   SelectContent,
@@ -193,6 +194,27 @@ export default function CreateParcel() {
                 <span className="text-muted-foreground">orders scanned</span>
               </div>
             </div>
+
+            {activeParcel.shipmentNo && (
+              <details className="bg-card border border-border rounded-xl">
+                <summary className="cursor-pointer select-none p-4 font-medium flex items-center gap-2">
+                  <Route className="w-4 h-4" /> Print label / view full tracking
+                </summary>
+                <div className="p-4 pt-0 space-y-3">
+                  <QrCodePanel
+                    value={`${window.location.origin}/track/shipment/${encodeURIComponent(activeParcel.shipmentNo)}`}
+                    label={activeParcel.shipmentNo}
+                    title="Shipment QR"
+                  />
+                  <Link
+                    to={`/track/shipment/${encodeURIComponent(activeParcel.shipmentNo)}`}
+                    className="text-sm text-primary hover:underline flex items-center justify-center gap-1"
+                  >
+                    Open full tracking page
+                  </Link>
+                </div>
+              </details>
+            )}
 
             {/* Scan Input */}
             <ScanInput

@@ -431,6 +431,30 @@ export const shipmentApi = {
     ),
 };
 
+// ─── Vehicle APIs ──────────────────────────────────────────────────────────
+
+export interface VehicleSummary {
+  id: string;
+  vehicleType: string;
+  vehicleNumber: string;
+  capacityKg: number;
+  maxParcels: number;
+  status: string;
+}
+
+export const vehicleApi = {
+  getAvailable: (warehouseId: string) =>
+    apiClient.get<ApiResponse<VehicleSummary[]>>(
+      `/api/v1/admin/warehouse/${warehouseId}/vehicles/available`
+    ),
+
+  assign: (shipmentId: string, vehicleId: string) =>
+    apiClient.post<ApiResponse<{ shipmentId: string; vehicleId: string }>>(
+      `/api/v1/admin/warehouse/shipments/${shipmentId}/assign-vehicle`,
+      { vehicleId }
+    ),
+};
+
 // ─── VRP APIs ─────────────────────────────────────────────────────────────
 
 export const vrpApi = {
@@ -585,43 +609,73 @@ export const orderApi = {
     ),
 };
 
-// ─── Route / Tracking APIs ─────────────────────────────────────────────────
+// ─── Journey / Tracking APIs ────────────────────────────────────────────────
+//
+// Backed by JourneyController — the full, real lifecycle timeline for a
+// parcel or shipment (event actor, transport mode, vehicle, location, time).
 
-export interface TrackingEvent {
-  eventType: string;
-  label: string;
-  warehouseId?: string;
-  warehouseCity?: string;
-  warehouseName?: string;
-  shipmentId?: string;
+export interface JourneyTimelineEntry {
+  source: 'PARCEL_EVENT' | 'LEG';
+  occurredAt?: string;
+  eventType?: string;
+  actorType?: string;
+  actorName?: string;
+  actorPhoneMasked?: string;
+  transportMode?: string;
+  vehicleNumber?: string;
+  locationName?: string;
+  locationCity?: string;
+  parcelId?: string;
   shipmentNo?: string;
-  timestamp?: string;
-  performedBy?: string;
-  completed: boolean;
+  legSequence?: number;
+  legType?: string;
+  notes?: string;
 }
 
-export interface ParcelTrackingRoute {
+export interface ParcelJourney {
   parcelId: string;
-  orderId: string;
-  orderNo?: string;
+  orderId?: string;
   currentStatus: BackendParcelStatus;
-  events: TrackingEvent[];
+  currentWarehouseId?: string;
+  originWarehouseId?: string;
+  destinationWarehouseId?: string;
+  timeline: JourneyTimelineEntry[];
 }
 
-export const trackingApi = {
-  getParcelRoute: (parcelId: string) =>
-    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
-      `/api/v1/admin/warehouse/parcels/${parcelId}/route`
-    ),
+export interface ShipmentLegSummary {
+  sequence: number;
+  legType?: string;
+  status: string;
+  fromCity?: string;
+  toCity?: string;
+  fromWarehouseId?: string;
+  toWarehouseId?: string;
+  vehicleId?: string;
+  vehicleNumber?: string;
+  transportMode?: string;
+  dispatchingRiderName?: string;
+  receivingRiderName?: string;
+  estimatedArrival?: string;
+  actualArrival?: string;
+}
 
-  getOrderRoute: (orderId: string) =>
-    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
-      `/api/v1/admin/orders/${orderId}/route`
-    ),
+export interface ShipmentJourney {
+  shipmentId: string;
+  shipmentNo: string;
+  currentStatus: string;
+  originCity?: string;
+  destinationCity?: string;
+  legs: ShipmentLegSummary[];
+  timeline: JourneyTimelineEntry[];
+}
 
-  getShipmentRoute: (shipmentId: string) =>
-    apiClient.get<ApiResponse<ParcelTrackingRoute>>(
-      `/api/v1/admin/warehouse/shipments/${shipmentId}/route`
+export const journeyApi = {
+  getParcelJourney: (parcelId: string) =>
+    apiClient.get<ApiResponse<ParcelJourney>>(`/api/v1/parcels/${parcelId}/journey`),
+
+  getShipmentJourney: (shipmentNo: string) =>
+    apiClient.get<ApiResponse<ShipmentJourney>>(
+      `/api/v1/shipments/${encodeURIComponent(shipmentNo)}/journey`
     ),
 };
 
@@ -680,6 +734,7 @@ export function mapBackendShipmentToParcel(s: BackendShipment): Parcel {
   return {
     id: s.id,
     qrCode: s.id,
+    shipmentNo: s.shipmentNo,
     destinationCity: s.destinationCity,
     currentWarehouse: s.originCity,
     orders: s.parcels?.map(p => p.id) ?? [],

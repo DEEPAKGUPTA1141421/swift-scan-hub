@@ -4,15 +4,23 @@ import {
   warehouseApi,
   parcelApi,
   shipmentApi,
+  vehicleApi,
   BackendWarehouse,
   mapBackendParcelToOrder,
   mapBackendShipmentToParcel,
 } from '@/services/api';
+import { hubOwnerAuthApi, AuthApiError } from '@/services/authApi';
+import { saveSession, loadSession, clearSession } from '@/lib/session';
 
 interface ReceiveOrderResult {
   success: boolean;
   order?: Order;
   needsOtp?: boolean;
+  error?: string;
+}
+
+interface AuthResult {
+  success: boolean;
   error?: string;
 }
 
@@ -26,8 +34,9 @@ interface WarehouseContextType {
   isLoadingWarehouses: boolean;
   isLoadingData: boolean;
 
-  // Auth
-  login: (email: string, password: string) => Promise<boolean>;
+  // Auth — phone + OTP, HUB_OWNER accounts provisioned by an admin
+  requestOtp: (phone: string) => Promise<AuthResult>;
+  verifyOtp: (phone: string, otp: string) => Promise<AuthResult>;
   logout: () => void;
 
   // Warehouse
@@ -43,7 +52,7 @@ interface WarehouseContextType {
   // Parcel operations (backend: shipment)
   createParcel: (destinationCity: string) => Promise<Parcel>;
   closeParcel: (parcelId: string) => Promise<{ success: boolean; error?: string }>;
-  dispatchParcel: (parcelId: string, riderId: string, vehicleNumber: string) => Promise<{ success: boolean; error?: string }>;
+  dispatchParcel: (parcelId: string, riderId: string, vehicleId: string) => Promise<{ success: boolean; error?: string }>;
   receiveParcel: (qrCode: string) => Promise<{ success: boolean; parcel?: Parcel; error?: string }>;
   openParcel: (parcelId: string) => Promise<{ success: boolean; error?: string }>;
   getParcelByQr: (qrCode: string) => Parcel | undefined;
@@ -55,9 +64,15 @@ interface WarehouseContextType {
 
 const WarehouseContext = createContext<WarehouseContextType | undefined>(undefined);
 
+function sessionToUser(session: ReturnType<typeof loadSession>): User | null {
+  if (!session) return null;
+  return { id: session.id, phone: session.phone, name: session.name, role: 'HUB_OWNER', warehouseId: session.warehouseId };
+}
+
 export function WarehouseProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [currentWarehouseId, setCurrentWarehouseId] = useState<string | null>(null);
+  const initialSession = loadSession();
+  const [user, setUser] = useState<User | null>(() => sessionToUser(initialSession));
+  const [currentWarehouseId, setCurrentWarehouseId] = useState<string | null>(initialSession?.warehouseId ?? null);
   const [backendWarehouses, setBackendWarehouses] = useState<BackendWarehouse[]>([]);
   const [isLoadingWarehouses, setIsLoadingWarehouses] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -182,17 +197,44 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
-  const login = async (email: string, password: string): Promise<boolean> => {
-    if (!email || !password) return false;
-    setUser({
-      id: 'user-1',
-      email,
-      role: email.includes('manager') ? 'MANAGER' : 'OPERATOR',
-    });
-    return true;
+  // Step 1: phone -> OTP sent via SMS. Rejected if not a provisioned hub owner.
+  const requestOtp = async (phone: string): Promise<AuthResult> => {
+    try {
+      await hubOwnerAuthApi.requestOtp(phone);
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof AuthApiError ? err.message : 'Failed to send OTP';
+      return { success: false, error: msg };
+    }
+  };
+
+  // Step 2: phone + OTP -> real access/refresh tokens, session persisted.
+  const verifyOtp = async (phone: string, otp: string): Promise<AuthResult> => {
+    try {
+      const res = await hubOwnerAuthApi.verifyOtp(phone, otp);
+      const { accessToken, refreshToken, user: hubOwner } = res.data;
+
+      saveSession({
+        accessToken,
+        refreshToken,
+        id: hubOwner.id,
+        phone: hubOwner.phone,
+        name: hubOwner.name,
+        warehouseId: hubOwner.warehouseId,
+      });
+
+      setUser({ id: hubOwner.id, phone: hubOwner.phone, name: hubOwner.name, role: 'HUB_OWNER', warehouseId: hubOwner.warehouseId });
+      if (hubOwner.warehouseId) setCurrentWarehouseId(hubOwner.warehouseId);
+
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof AuthApiError ? err.message : 'Invalid OTP';
+      return { success: false, error: msg };
+    }
   };
 
   const logout = () => {
+    clearSession();
     setUser(null);
     setCurrentWarehouseId(null);
     setOrders([]);
@@ -332,30 +374,44 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   const dispatchParcel = async (
     parcelId: string,
     riderId: string,
-    _vehicleNumber: string
+    vehicleId: string
   ): Promise<{ success: boolean; error?: string }> => {
     const parcel = parcels.find(p => p.id === parcelId);
     if (!parcel) return { success: false, error: 'Parcel not found' };
     if (parcel.status !== 'READY_TO_DISPATCH') return { success: false, error: 'Parcel not ready for dispatch' };
 
     try {
-      // Assign delivery rider to each parcel in the shipment
+      if (vehicleId) {
+        await vehicleApi.assign(parcelId, vehicleId);
+      }
+
+      // Assign delivery rider to each order in the shipment — collect failures
+      // instead of silently swallowing them.
+      let riderFailures = 0;
       if (riderId) {
-        await Promise.allSettled(
+        const results = await Promise.allSettled(
           parcel.orders.map(orderId => parcelApi.assignDeliveryRider(orderId, riderId))
         );
+        riderFailures = results.filter(r => r.status === 'rejected').length;
       }
 
       await shipmentApi.updateStatus(parcelId, 'IN_TRANSIT');
 
       setParcels(prev => prev.map(p =>
         p.id === parcelId
-          ? { ...p, status: 'DISPATCHED' as const, dispatchedAt: new Date(), riderId }
+          ? { ...p, status: 'DISPATCHED' as const, dispatchedAt: new Date(), riderId, vehicleNumber: vehicleId || undefined }
           : p
       ));
       setOrders(prev => prev.map(o =>
         parcel.orders.includes(o.id) ? { ...o, status: 'DISPATCHED' as const } : o
       ));
+
+      if (riderFailures > 0) {
+        return {
+          success: true,
+          error: `Dispatched, but rider assignment failed for ${riderFailures} of ${parcel.orders.length} order(s)`,
+        };
+      }
       return { success: true };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to dispatch parcel';
@@ -441,7 +497,8 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
       parcels,
       isLoadingWarehouses,
       isLoadingData,
-      login,
+      requestOtp,
+      verifyOtp,
       logout,
       selectWarehouse,
       refreshData,

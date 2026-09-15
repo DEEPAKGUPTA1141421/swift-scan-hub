@@ -24,6 +24,7 @@ export interface Order {
 export interface Parcel {
   id: string;
   qrCode: string;
+  shipmentNo?: string;
   destinationCity: string;
   currentWarehouse: string;
   orders: string[];
@@ -36,8 +37,9 @@ export interface Parcel {
 
 export interface User {
   id: string;
-  email: string;
-  role: 'OPERATOR' | 'MANAGER';
+  phone: string;
+  name?: string;
+  role: 'HUB_OWNER';
   warehouseId?: string;
 }
 

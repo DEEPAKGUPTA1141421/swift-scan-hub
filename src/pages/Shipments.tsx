@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Loader2, Pencil, Trash2, Plus, Send, RefreshCw } from 'lucide-react';
+import { Loader2, Pencil, Trash2, Plus, Send, RefreshCw, Route } from 'lucide-react';
 import { toast } from 'sonner';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
@@ -164,6 +164,11 @@ export default function Shipments() {
                   <Td>
                     <div className="flex gap-1 flex-wrap">
                       <Button size="sm" variant="ghost" onClick={() => setDetail(s)}>View</Button>
+                      <Button size="sm" variant="ghost" asChild>
+                        <Link to={`/track/shipment/${encodeURIComponent(s.shipmentNo ?? s.id)}`} title="Track & QR">
+                          <Route className="w-3.5 h-3.5" />
+                        </Link>
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => setEdit(s)}
                         disabled={s.status !== 'CREATED' && s.status !== 'ASSIGNED'}>
                         <Pencil className="w-3.5 h-3.5" />

@@ -35,7 +35,7 @@ export function Layout({ children }: LayoutProps) {
               
               <div className="flex items-center gap-4">
                 <span className="text-sm text-muted-foreground hidden sm:block">
-                  {user.email}
+                  {user.name ?? user.phone}
                 </span>
                 <Button
                   variant="ghost"

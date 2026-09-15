@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Package, MapPin, Loader2, User,
-  RefreshCw, Route, ArrowRight, CheckCircle2, Clock, Users,
+  RefreshCw, Route, ArrowRight, CheckCircle2, Clock, Users, AlertCircle,
 } from 'lucide-react';
 import { useWarehouse } from '@/context/WarehouseContext';
 import { Layout } from '@/components/Layout';
@@ -12,110 +12,14 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
+import { TrackingTimeline } from '@/components/TrackingTimeline';
 import {
-  parcelApi, shipmentApi, orderApi,
-  BackendParcel, BackendShipment, BackendOrder,
+  parcelApi, shipmentApi, orderApi, journeyApi,
+  BackendParcel, BackendShipment, BackendOrder, ParcelJourney,
 } from '@/services/api';
 import type { Warehouse } from '@/types/warehouse';
 import { ApiError } from '@/lib/apiClient';
 import { toast } from 'sonner';
-
-// ─── Route timeline builder ───────────────────────────────────────────────────
-
-type StepStatus = 'completed' | 'active' | 'pending';
-
-interface RouteStep {
-  label: string;
-  sublabel: string;
-  timestamp?: string;
-  status: StepStatus;
-  shipmentId?: string;
-}
-
-const STATUS_ORDER = [
-  'CREATED', 'AWAITING_PICKUP', 'PICKED_BY_RIDER', 'AT_WAREHOUSE',
-  'IN_SHIPMENT', 'IN_TRANSIT', 'AT_DEST_WAREHOUSE', 'OUT_FOR_DELIVERY',
-  'DELIVERED', 'RETURNED', 'FAILED',
-];
-
-function isOrAfter(current: string, threshold: string): boolean {
-  return STATUS_ORDER.indexOf(current) >= STATUS_ORDER.indexOf(threshold);
-}
-
-function buildRouteFromParcel(
-  parcel: BackendParcel,
-  warehouseMap: Record<string, Warehouse>,
-): RouteStep[] {
-  const origin = warehouseMap[parcel.originWarehouseId];
-  const dest = warehouseMap[parcel.destinationWarehouseId];
-  const s = parcel.status;
-
-  const steps: RouteStep[] = [
-    {
-      label: 'Order Created',
-      sublabel: `Seller → ${origin?.city ?? 'Origin warehouse'}`,
-      timestamp: parcel.createdAt,
-      status: 'completed',
-    },
-    {
-      label: 'Picked up from Seller',
-      sublabel: parcel.sellerPickupOtpVerified
-        ? `OTP verified · en route to ${origin?.city ?? 'warehouse'}`
-        : 'Awaiting rider pickup',
-      timestamp: parcel.pickedAt ?? undefined,
-      status: parcel.sellerPickupOtpVerified
-        ? 'completed'
-        : isOrAfter(s, 'PICKED_BY_RIDER') ? 'active' : 'pending',
-    },
-    {
-      label: `Arrived at ${origin?.city ?? 'Origin'} Warehouse`,
-      sublabel: origin?.name ?? parcel.originWarehouseId.slice(0, 8),
-      timestamp: parcel.arrivedAtWarehouseAt ?? undefined,
-      status: parcel.warehouseInOtpVerified
-        ? 'completed'
-        : s === 'AT_WAREHOUSE' ? 'active'
-        : isOrAfter(s, 'IN_SHIPMENT') ? 'completed' : 'pending',
-    },
-  ];
-
-  const multiHop = parcel.originWarehouseId !== parcel.destinationWarehouseId;
-  if (multiHop) {
-    steps.push({
-      label: 'In Transit',
-      sublabel: `${origin?.city ?? 'Origin'} → ${dest?.city ?? 'Destination'}`,
-      status: ['IN_SHIPMENT', 'IN_TRANSIT'].includes(s)
-        ? 'active'
-        : isOrAfter(s, 'AT_DEST_WAREHOUSE') ? 'completed' : 'pending',
-      shipmentId: parcel.shipmentId ?? undefined,
-    });
-    steps.push({
-      label: `At ${dest?.city ?? 'Destination'} Warehouse`,
-      sublabel: dest?.name ?? parcel.destinationWarehouseId.slice(0, 8),
-      status: s === 'AT_DEST_WAREHOUSE'
-        ? 'active'
-        : isOrAfter(s, 'OUT_FOR_DELIVERY') ? 'completed' : 'pending',
-    });
-  }
-
-  steps.push({
-    label: 'Out for Delivery',
-    sublabel: 'Last-mile rider dispatched to customer',
-    status: s === 'OUT_FOR_DELIVERY'
-      ? 'active'
-      : isOrAfter(s, 'DELIVERED') ? 'completed' : 'pending',
-  });
-
-  steps.push({
-    label: 'Delivered to Customer',
-    sublabel: parcel.customerDeliveryOtpVerified
-      ? 'OTP verified · Delivered'
-      : s === 'DELIVERED' ? 'Delivered' : 'Pending delivery',
-    timestamp: parcel.deliveredAt ?? undefined,
-    status: parcel.customerDeliveryOtpVerified || s === 'DELIVERED' ? 'completed' : 'pending',
-  });
-
-  return steps;
-}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -537,9 +441,25 @@ function RouteTrackingModal({
   warehouseMap: Record<string, Warehouse>;
   onClose: () => void;
 }) {
-  const steps = buildRouteFromParcel(parcel, warehouseMap);
   const origin = warehouseMap[parcel.originWarehouseId];
   const dest = warehouseMap[parcel.destinationWarehouseId];
+
+  const [journey, setJourney] = useState<ParcelJourney | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    journeyApi.getParcelJourney(parcel.id)
+      .then(res => { if (!cancelled) setJourney(res.data); })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : 'Failed to load journey');
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [parcel.id]);
 
   return (
     <Dialog open onOpenChange={open => !open && onClose()}>
@@ -547,7 +467,7 @@ function RouteTrackingModal({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Route className="w-5 h-5 text-primary" />
-            Route Timeline
+            Journey
           </DialogTitle>
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground pt-1">
             <span className="font-mono">Parcel {parcel.id.slice(0, 8)}…</span>
@@ -564,48 +484,19 @@ function RouteTrackingModal({
           </div>
         </DialogHeader>
 
-        {/* Vertical timeline */}
-        <div className="relative mt-4 pl-7">
-          <div className="absolute left-[13px] top-2 bottom-2 w-0.5 bg-border" />
-          <div className="space-y-5">
-            {steps.map((step, i) => (
-              <div key={i} className="relative flex gap-4">
-                {/* Node */}
-                <div className={`absolute -left-7 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-0.5
-                  ${step.status === 'completed'
-                    ? 'bg-success border-success'
-                    : step.status === 'active'
-                    ? 'bg-primary border-primary'
-                    : 'bg-background border-muted-foreground/30'}`}
-                >
-                  {step.status === 'completed' && (
-                    <CheckCircle2 className="w-3 h-3 text-white" />
-                  )}
-                  {step.status === 'active' && (
-                    <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                  )}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 pb-1">
-                  <p className={`font-medium text-sm ${step.status === 'pending' ? 'text-muted-foreground' : ''}`}>
-                    {step.label}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{step.sublabel}</p>
-                  {step.shipmentId && (
-                    <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                      Shipment: {step.shipmentId.slice(0, 8)}…
-                    </p>
-                  )}
-                  {step.timestamp && (
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {new Date(step.timestamp).toLocaleString()}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+        {/* Live timeline from the backend journey log */}
+        <div className="mt-4">
+          {loading && (
+            <div className="flex items-center justify-center gap-2 text-muted-foreground p-6">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading journey…
+            </div>
+          )}
+          {!loading && error && (
+            <div className="flex items-center gap-2 text-sm text-destructive p-4">
+              <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+            </div>
+          )}
+          {!loading && !error && journey && <TrackingTimeline timeline={journey.timeline} />}
         </div>
 
         {/* OTP checkpoint summary */}

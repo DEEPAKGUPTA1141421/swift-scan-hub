@@ -19,7 +19,7 @@ import { MetricCard } from '@/components/MetricCard';
 import { ActionCard } from '@/components/ActionCard';
 
 export default function Dashboard() {
-  const { user, currentWarehouse, getDashboardStats, dashboardStats, isLoadingData } = useWarehouse();
+  const { user, currentWarehouse, isLoadingWarehouses, getDashboardStats, dashboardStats, isLoadingData } = useWarehouse();
   const navigate = useNavigate();
   const stats = dashboardStats ?? getDashboardStats();
   const warehouseName = stats.warehouseName ?? currentWarehouse?.name;
@@ -29,10 +29,14 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user) {
       navigate('/login');
-    } else if (!currentWarehouse) {
+    } else if (!currentWarehouse && !isLoadingWarehouses) {
+      // Wait for the warehouse list to finish loading before deciding this
+      // hub owner really has no warehouse — otherwise a hub owner whose
+      // warehouseId was set at login gets bounced to /select-warehouse for
+      // a moment while warehouseApi.list() is still in flight.
       navigate('/select-warehouse');
     }
-  }, [user, currentWarehouse, navigate]);
+  }, [user, currentWarehouse, isLoadingWarehouses, navigate]);
 
   if (!user || !currentWarehouse) return null;
 
@@ -42,7 +46,7 @@ export default function Dashboard() {
         <div>
           <h1 className="text-3xl font-bold">Dashboard</h1>
           <p className="text-muted-foreground mt-1">
-            Welcome back, {user.email.split('@')[0]} - {warehouseName}, {warehouseCity}
+            Welcome back, {user.name ?? user.phone} - {warehouseName}, {warehouseCity}
           </p>
         </div>
 
@@ -133,7 +137,7 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <MetricCard
                 title="Active Riders"
-                value={stats.activeRiders ?? 20}
+                value={stats.activeRiders ?? 0}
                 icon={Users}
                 to="/riders"
               />

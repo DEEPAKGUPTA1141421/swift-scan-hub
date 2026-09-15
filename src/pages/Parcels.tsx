@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Loader2, Pencil, Trash2, Plus, Package, RefreshCw } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Loader2, Pencil, Trash2, Plus, Package, RefreshCw, Route } from 'lucide-react';
 import { toast } from 'sonner';
 import { Layout } from '@/components/Layout';
 import { PageHeader } from '@/components/PageHeader';
@@ -134,6 +134,11 @@ export default function Parcels() {
                   <Td>
                     <div className="flex gap-1">
                       <Button size="sm" variant="ghost" onClick={() => setDetail(p)}>View</Button>
+                      <Button size="sm" variant="ghost" asChild>
+                        <Link to={`/track/parcel/${p.id}`} title="Track & QR">
+                          <Route className="w-3.5 h-3.5" />
+                        </Link>
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => setEdit(p)}>
                         <Pencil className="w-3.5 h-3.5" />
                       </Button>
